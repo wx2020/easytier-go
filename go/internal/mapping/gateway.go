@@ -66,9 +66,9 @@ type MockGateway struct {
 	nextPort   uint16
 	backend    string
 	// fail flags simulate discovery or mapping failures for fallback tests.
-	FailAddAny    bool
-	FailAddPort   bool
-	FailRemove    bool
+	FailAddAny     bool
+	FailAddPort    bool
+	FailRemove     bool
 	FailExternalIP bool
 }
 

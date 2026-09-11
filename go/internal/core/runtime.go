@@ -337,6 +337,9 @@ type nodeRuntime struct {
 	noTun          bool
 	tunAddresses   *tun.AssignedAddresses
 
+	// stateMu guards the lifecycle fields that are published by the serve
+	// goroutine while Close and external observers may read them.
+	stateMu   sync.RWMutex
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -442,8 +445,8 @@ func (n *Node) serveManaged(ctx context.Context) error {
 	if err := r.initICMPProxy(); err != nil {
 		return err
 	}
-	r.startRAAnnouncer(serveCtx, &n.wg)
-
+	// The packet channel must exist before the RA announcer starts: its
+	// goroutine reads r.tunPackets without further synchronization.
 	if r.packetHandler != nil || r.rpcHandler != nil || r.center != nil || r.tun != nil {
 		r.tunPackets = make(chan []byte, 128)
 		n.wg.Add(1)
@@ -452,6 +455,8 @@ func (n *Node) serveManaged(ctx context.Context) error {
 			r.packetLoop(serveCtx)
 		}()
 	}
+	r.startRAAnnouncer(serveCtx, &n.wg)
+
 	if (r.routeEngine != nil || r.ospf != nil) && r.manager.Router != nil {
 		n.wg.Add(1)
 		go func() {
@@ -897,9 +902,13 @@ func (r *nodeRuntime) installRPCPipeline() {
 // ensurePeerRPC creates the mesh RPC manager when no other subsystem has.
 // It mirrors runtimeRpcTransport usage in initCenter.
 func (r *nodeRuntime) ensurePeerRPC() (*rpc.PeerRpcManager, error) {
+	r.stateMu.RLock()
 	if r.peerRPC != nil {
-		return r.peerRPC, nil
+		peerRPC := r.peerRPC
+		r.stateMu.RUnlock()
+		return peerRPC, nil
 	}
+	r.stateMu.RUnlock()
 	transport := &runtimeRpcTransport{
 		localPeerID: r.manager.LocalPeerID(),
 		send: func(ctx context.Context, dstPeerID uint32, packet protocol.Packet) error {
@@ -910,7 +919,9 @@ func (r *nodeRuntime) ensurePeerRPC() (*rpc.PeerRpcManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create peer rpc manager: %w", err)
 	}
+	r.stateMu.Lock()
 	r.peerRPC = peerRPC
+	r.stateMu.Unlock()
 	return peerRPC, nil
 }
 
@@ -929,7 +940,10 @@ func (r *nodeRuntime) ospfRPCDomain() string {
 // RPC dispatch into the manager pipeline. It is a no-op when OSPF is
 // disabled or already started.
 func (r *nodeRuntime) initFlooder(ctx context.Context) error {
-	if !r.ospfEnabled || r.ospf != nil {
+	r.stateMu.RLock()
+	enabled, started := r.ospfEnabled, r.ospf != nil
+	r.stateMu.RUnlock()
+	if !enabled || started {
 		return nil
 	}
 	peerRPC, err := r.ensurePeerRPC()
@@ -952,7 +966,9 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 	if err := peerRPC.Register(domain, route.NewOSPFService(flooder)); err != nil {
 		return fmt.Errorf("register ospf rpc service: %w", err)
 	}
+	r.stateMu.Lock()
 	r.ospf = flooder
+	r.stateMu.Unlock()
 	r.installRPCPipeline()
 	flooder.Start(ctx)
 	return nil
@@ -989,7 +1005,10 @@ func equalLinkCosts(a, b map[uint32]uint32) bool {
 // equivalent) and attaches it to the inbound packet path. It is a no-op
 // when disabled or already started.
 func (r *nodeRuntime) initICMPProxy() error {
-	if !r.icmpEnabled || r.icmpProxy != nil {
+	r.stateMu.RLock()
+	enabled, started := r.icmpEnabled, r.icmpProxy != nil
+	r.stateMu.RUnlock()
+	if !enabled || started {
 		return nil
 	}
 	var v4 [4]byte
@@ -1010,7 +1029,9 @@ func (r *nodeRuntime) initICMPProxy() error {
 		return fmt.Errorf("create icmp proxy: %w", err)
 	}
 	proxy.Start()
+	r.stateMu.Lock()
 	r.icmpProxy = proxy
+	r.stateMu.Unlock()
 	return nil
 }
 
@@ -1055,7 +1076,9 @@ func (r *nodeRuntime) startRAAnnouncer(ctx context.Context, wg *sync.WaitGroup) 
 		r.addStat("ra_provider_errors", 1)
 		return
 	}
+	r.stateMu.Lock()
 	r.raProvider = provider
+	r.stateMu.Unlock()
 	interval := r.raInterval
 	if interval <= 0 {
 		interval = DefaultRAAnnounceInterval
@@ -1063,7 +1086,9 @@ func (r *nodeRuntime) startRAAnnouncer(ctx context.Context, wg *sync.WaitGroup) 
 	// Independent lifecycle: serveCtx is canceled only when serveManaged
 	// returns, which waits for this goroutine via wg. Stop via close().
 	raCtx, raCancel := context.WithCancel(context.Background())
+	r.stateMu.Lock()
 	r.raCancel = raCancel
+	r.stateMu.Unlock()
 	stopOnParent := context.AfterFunc(ctx, func() { raCancel() })
 	wg.Add(1)
 	go func() {
@@ -1125,6 +1150,21 @@ func (r *nodeRuntime) LastRA() []byte {
 	return append([]byte(nil), r.lastRA...)
 }
 
+// OSPF returns the OSPF flooder once the serve goroutine has published it.
+func (r *nodeRuntime) OSPF() *route.Flooder {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.ospf
+}
+
+// PeerRPC returns the mesh RPC manager once the serve goroutine has
+// published it.
+func (r *nodeRuntime) PeerRPC() *rpc.PeerRpcManager {
+	r.stateMu.RLock()
+	defer r.stateMu.RUnlock()
+	return r.peerRPC
+}
+
 // buildIPv6Packet wraps payload in a minimal IPv6 header (hop limit 255
 // per RFC 4861 section 7.1.2 for router advertisements).
 func buildIPv6Packet(src, dst netip.Addr, nextHeader byte, payload []byte) []byte {
@@ -1145,7 +1185,10 @@ func buildIPv6Packet(src, dst netip.Addr, nextHeader byte, payload []byte) []byt
 // initCenter builds the peer-center RPC manager and instance when a network name
 // is configured. It is a no-op when disabled or already started.
 func (r *nodeRuntime) initCenter(ctx context.Context) error {
-	if r.centerDomain == "" || r.peerRPC != nil {
+	r.stateMu.RLock()
+	configured, peerRPCReady := r.centerDomain != "", r.peerRPC != nil
+	r.stateMu.RUnlock()
+	if !configured || peerRPCReady {
 		return nil
 	}
 	transport := &runtimeRpcTransport{
@@ -1158,13 +1201,17 @@ func (r *nodeRuntime) initCenter(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create peer-center rpc manager: %w", err)
 	}
+	r.stateMu.Lock()
 	r.peerRPC = peerRPC
+	r.stateMu.Unlock()
 	r.installRPCPipeline()
 	center, err := peercenter.NewInstance(&runtimePeerInfoProvider{runtime: r}, peerRPC)
 	if err != nil {
 		return fmt.Errorf("create peer-center instance: %w", err)
 	}
+	r.stateMu.Lock()
 	r.center = center
+	r.stateMu.Unlock()
 	return center.Start(ctx)
 }
 
@@ -1315,21 +1362,24 @@ func (r *nodeRuntime) tunEgress(ctx context.Context) ([]byte, error) {
 
 func (r *nodeRuntime) close() error {
 	r.closeOnce.Do(func() {
-		if r.center != nil {
-			r.center.Stop()
+		r.stateMu.RLock()
+		center, ospf, icmpProxy, raCancel, peerRPC := r.center, r.ospf, r.icmpProxy, r.raCancel, r.peerRPC
+		r.stateMu.RUnlock()
+		if center != nil {
+			center.Stop()
 		}
-		if r.ospf != nil {
-			r.ospf.Stop()
+		if ospf != nil {
+			ospf.Stop()
 		}
-		if r.icmpProxy != nil {
-			r.icmpProxy.Stop()
+		if icmpProxy != nil {
+			icmpProxy.Stop()
 		}
-		if r.raCancel != nil {
-			r.raCancel()
+		if raCancel != nil {
+			raCancel()
 		}
 		r.stopAux()
-		if r.peerRPC != nil {
-			r.peerRPC.Close()
+		if peerRPC != nil {
+			peerRPC.Close()
 		}
 		if r.manager != nil {
 			r.closeErr = errors.Join(r.closeErr, r.manager.Close())

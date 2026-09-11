@@ -12,8 +12,8 @@ import (
 
 // WinDriverSpec describes driver packaging for Windows.
 type WinDriverSpec struct {
-	Arch        string // x86, x86_64, arm64
-	WintunDLL   string // path to wintun.dll
+	Arch         string // x86, x86_64, arm64
+	WintunDLL    string // path to wintun.dll
 	WinDivertDLL string // path to WinDivert.dll (for fake-TCP)
 	WinDivertSys string // path to WinDivert.sys
 }

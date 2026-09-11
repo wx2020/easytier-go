@@ -34,13 +34,13 @@ func TestNodeOSPFInitWiresFlooderAndService(t *testing.T) {
 	go func() { serveResult <- node.Serve(ctx) }()
 
 	deadline := time.Now().Add(3 * time.Second)
-	for node.runtime.ospf == nil && time.Now().Before(deadline) {
+	for node.runtime.OSPF() == nil && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
-	if node.runtime.ospf == nil {
+	if node.runtime.OSPF() == nil {
 		t.Fatal("OSPF flooder was not initialized")
 	}
-	if node.runtime.peerRPC == nil {
+	if node.runtime.PeerRPC() == nil {
 		t.Fatal("peer RPC manager was not initialized for OSPF")
 	}
 	_ = node.Close()
@@ -218,7 +218,7 @@ func TestNodeOSPFDisabledByDefault(t *testing.T) {
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- node.Serve(ctx) }()
 	time.Sleep(200 * time.Millisecond)
-	if node.runtime.ospf != nil {
+	if node.runtime.OSPF() != nil {
 		t.Fatal("OSPF flooder must not start unless enabled")
 	}
 	_ = node.Close()

@@ -13,10 +13,10 @@ type TunConfig struct {
 
 // RouteConfig describes desired routes for an interface.
 type RouteConfig struct {
-	IfName string
-	Routes []string // CIDRs e.g. "10.144.144.0/24"
+	IfName  string
+	Routes  []string // CIDRs e.g. "10.144.144.0/24"
 	Gateway string
-	Metric int
+	Metric  int
 }
 
 // DNSConfig describes resolver configuration.
@@ -43,12 +43,12 @@ type ServiceConfig struct {
 // Plan is a dry-run description of what would be executed on the target OS.
 // It is used for unit tests without requiring privileges.
 type Plan struct {
-	OS          string
-	DryRun      bool
-	Privileged  bool
-	Actions     []Action
-	Warnings    []string
-	Rollback    []Action
+	OS         string
+	DryRun     bool
+	Privileged bool
+	Actions    []Action
+	Warnings   []string
+	Rollback   []Action
 }
 
 // Action describes a single operation in a Plan.

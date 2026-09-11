@@ -48,18 +48,18 @@ type quicEntry struct {
 }
 
 type quicConn struct {
-	dst      string
-	streams  map[uint64]*quicStream
-	nextSID  atomic.Uint64
-	mu       sync.Mutex
-	closed   bool
+	dst     string
+	streams map[uint64]*quicStream
+	nextSID atomic.Uint64
+	mu      sync.Mutex
+	closed  bool
 }
 
 type quicStream struct {
-	id      uint64
-	chC2S   *ReliableChannel
-	chS2C   *ReliableChannel
-	entry   *quicEntry
+	id    uint64
+	chC2S *ReliableChannel
+	chS2C *ReliableChannel
+	entry *quicEntry
 }
 
 // NewQUICProxy creates a proxy respecting flags.EnableQUICProxy and DisableQUICInput.

@@ -111,5 +111,5 @@ func EffectiveMTU(mtu int, encryption bool) int {
 	return mtu
 }
 
-func intPtr(v int) *int       { return &v }
-func boolPtr(v bool) *bool    { return &v }
+func intPtr(v int) *int    { return &v }
+func boolPtr(v bool) *bool { return &v }

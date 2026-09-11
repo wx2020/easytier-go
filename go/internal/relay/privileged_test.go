@@ -44,15 +44,15 @@ func TestPrivilegedForeignTopologyCrossNamespace(t *testing.T) {
 	// instantiated per-namespace and packets are bridged via real netns channels.
 
 	const (
-		nsA      = "relay_ns_a"
-		nsB      = "relay_ns_b"
-		br       = "br_relay"
-		hostA    = "veth_relay_a"
-		hostB    = "veth_relay_b"
-		guestA   = "veth_relay_a_g"
-		guestB   = "veth_relay_b_g"
-		ipA      = "10.201.1.1/24"
-		ipB      = "10.201.1.2/24"
+		nsA    = "relay_ns_a"
+		nsB    = "relay_ns_b"
+		br     = "br_relay"
+		hostA  = "veth_relay_a"
+		hostB  = "veth_relay_b"
+		guestA = "veth_relay_a_g"
+		guestB = "veth_relay_b_g"
+		ipA    = "10.201.1.1/24"
+		ipB    = "10.201.1.2/24"
 	)
 	// Cleanup stale
 	_ = runIPSilent("netns", "del", nsA)

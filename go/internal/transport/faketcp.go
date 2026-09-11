@@ -40,13 +40,13 @@ type FakeTCPService struct {
 
 // FakeTCPSession is one established fake-TCP tunnel.
 type FakeTCPSession struct {
-	conn     net.Conn
-	maxFrame int
-	receive  chan protocol.Packet
-	done     chan struct{}
+	conn      net.Conn
+	maxFrame  int
+	receive   chan protocol.Packet
+	done      chan struct{}
 	closeOnce sync.Once
-	writeMu  sync.Mutex
-	readMu   sync.Mutex
+	writeMu   sync.Mutex
+	readMu    sync.Mutex
 }
 
 // IsPrivileged reports whether the current process has the privileges required

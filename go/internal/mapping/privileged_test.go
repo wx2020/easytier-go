@@ -239,10 +239,12 @@ func TestPrivilegedMappingMiniupnpdBrUpnp(t *testing.T) {
 	ctx := context.Background()
 	local := netip.MustParseAddrPort(clientAIP + ":11010")
 	mapper := NewMapper(MapperOptions{
-		DiscoverIGD:    func(ctx context.Context) (Gateway, error) { return gw, nil },
-		DiscoverNATPMP: func(ctx context.Context) (Gateway, error) { return NewMockGateway(netip.MustParseAddr("5.6.7.8"), BackendNATPMP), nil },
-		LeaseDuration:  500 * time.Millisecond,
-		RenewInterval:  200 * time.Millisecond,
+		DiscoverIGD: func(ctx context.Context) (Gateway, error) { return gw, nil },
+		DiscoverNATPMP: func(ctx context.Context) (Gateway, error) {
+			return NewMockGateway(netip.MustParseAddr("5.6.7.8"), BackendNATPMP), nil
+		},
+		LeaseDuration: 500 * time.Millisecond,
+		RenewInterval: 200 * time.Millisecond,
 	})
 	lease, err := mapper.AddMapping(ctx, "udp://0.0.0.0:11010", local)
 	if err != nil {

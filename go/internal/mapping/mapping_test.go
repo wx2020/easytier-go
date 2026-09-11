@@ -104,10 +104,12 @@ func TestMockGatewayAddPortLeaseZeroRemoves(t *testing.T) {
 func TestMapperAddsViaIGD(t *testing.T) {
 	igd := NewMockGateway(netip.MustParseAddr("11.22.33.44"), BackendIGD)
 	mapper := NewMapper(MapperOptions{
-		DiscoverIGD:    func(ctx context.Context) (Gateway, error) { return igd, nil },
-		DiscoverNATPMP: func(ctx context.Context) (Gateway, error) { return NewMockGateway(netip.MustParseAddr("5.6.7.8"), BackendNATPMP), nil },
-		LeaseDuration:  300 * time.Millisecond,
-		RenewInterval:  100 * time.Millisecond,
+		DiscoverIGD: func(ctx context.Context) (Gateway, error) { return igd, nil },
+		DiscoverNATPMP: func(ctx context.Context) (Gateway, error) {
+			return NewMockGateway(netip.MustParseAddr("5.6.7.8"), BackendNATPMP), nil
+		},
+		LeaseDuration: 300 * time.Millisecond,
+		RenewInterval: 100 * time.Millisecond,
 	})
 	ctx := context.Background()
 	local := netip.MustParseAddrPort("192.168.1.2:11010")
@@ -134,7 +136,7 @@ func TestMapperFallbackToNATPMP(t *testing.T) {
 	igd.FailAddPort = true
 	nat := NewMockGateway(netip.MustParseAddr("5.6.7.8"), BackendNATPMP)
 	mapper := NewMapper(MapperOptions{
-		DiscoverIGD: func(ctx context.Context) (Gateway, error) { return igd, nil },
+		DiscoverIGD:    func(ctx context.Context) (Gateway, error) { return igd, nil },
 		DiscoverNATPMP: func(ctx context.Context) (Gateway, error) { return nat, nil },
 	})
 	ctx := context.Background()

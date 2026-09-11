@@ -29,10 +29,10 @@ const (
 )
 
 var (
-	ErrICMPProxyClosed    = errors.New("icmp proxy is closed")
-	ErrICMPSocketFailed   = errors.New("icmp socket creation failed")
-	ErrICMPInvalidPacket  = errors.New("invalid icmp packet")
-	ErrICMPNotIPv4        = errors.New("icmp packet is not ipv4")
+	ErrICMPProxyClosed     = errors.New("icmp proxy is closed")
+	ErrICMPSocketFailed    = errors.New("icmp socket creation failed")
+	ErrICMPInvalidPacket   = errors.New("invalid icmp packet")
+	ErrICMPNotIPv4         = errors.New("icmp packet is not ipv4")
 	ErrICMPUnsupportedType = errors.New("unsupported icmp type")
 )
 
@@ -43,10 +43,10 @@ type IcmpNatKey struct {
 }
 
 type IcmpNatEntry struct {
-	SrcPeerID  uint32
-	MyPeerID   uint32
-	SrcIP      [4]byte
-	StartTime  time.Time
+	SrcPeerID   uint32
+	MyPeerID    uint32
+	SrcIP       [4]byte
+	StartTime   time.Time
 	MappedDstIP [4]byte
 }
 
@@ -61,23 +61,23 @@ func newIcmpNatEntry(srcPeerID, myPeerID uint32, srcIP, mappedDstIP [4]byte) Icm
 }
 
 type IcmpProxyConfig struct {
-	MyPeerID    uint32
-	IPv4Addr    [4]byte
+	MyPeerID     uint32
+	IPv4Addr     [4]byte
 	CIDRMappings []CIDRMapping
-	ExitNode    bool
-	NoTUN       bool
-	SendPacket  func(ctx context.Context, peerID uint32, packet protocol.Packet) error
+	ExitNode     bool
+	NoTUN        bool
+	SendPacket   func(ctx context.Context, peerID uint32, packet protocol.Packet) error
 }
 
 type IcmpProxy struct {
-	config    IcmpProxyConfig
-	natTable  map[IcmpNatKey]IcmpNatEntry
-	natMu     sync.RWMutex
-	reasm     *IPReassembler
-	closed    atomic.Bool
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	config   IcmpProxyConfig
+	natTable map[IcmpNatKey]IcmpNatEntry
+	natMu    sync.RWMutex
+	reasm    *IPReassembler
+	closed   atomic.Bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func NewIcmpProxy(config IcmpProxyConfig) (*IcmpProxy, error) {

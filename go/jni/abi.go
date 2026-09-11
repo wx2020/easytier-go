@@ -100,8 +100,8 @@ func OutputDir(abi string) string {
 
 // BuildPlan describes building for all ABIs (dry-run).
 type BuildPlan struct {
-	ABIs    []string
-	Actions []BuildAction
+	ABIs     []string
+	Actions  []BuildAction
 	Warnings []string
 }
 

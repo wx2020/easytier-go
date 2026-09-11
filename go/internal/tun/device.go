@@ -41,12 +41,12 @@ type Device interface {
 // (10.144.144.0/24 per GWY-01 requirement, with fallback to 10.126.126.0/24 for
 // Rust compatibility). The first and last addresses are reserved.
 const (
-	DHCPPoolCIDR        = "10.144.144.0/24"
+	DHCPPoolCIDR         = "10.144.144.0/24"
 	DHCPPoolFallbackCIDR = "10.126.126.0/24"
-	DefaultMTU          = 1380
-	MaxMTU              = 65535
-	MinMTU              = 1280
-	EncryptionOverhead  = 20
+	DefaultMTU           = 1380
+	MaxMTU               = 65535
+	MinMTU               = 1280
+	EncryptionOverhead   = 20
 )
 
 var (
@@ -56,21 +56,21 @@ var (
 
 // TunConfig describes desired TUN addressing and TUN options.
 type TunConfig struct {
-	IPv4         string
-	IPv6         string
-	DHCP         bool
-	NoTUN        bool
-	MTU          uint32
+	IPv4             string
+	IPv6             string
+	DHCP             bool
+	NoTUN            bool
+	MTU              uint32
 	EnableEncryption bool
 }
 
 // AssignedAddresses holds the concrete addresses applied to a TUN device.
 type AssignedAddresses struct {
-	IPv4     *netip.Prefix
-	IPv6     *netip.Prefix
-	MTU      int
-	NoTUN    bool
-	DHCP     bool
+	IPv4  *netip.Prefix
+	IPv6  *netip.Prefix
+	MTU   int
+	NoTUN bool
+	DHCP  bool
 }
 
 // EffectiveMTU returns the MTU to program on the TUN device. When encryption
@@ -338,11 +338,11 @@ type MemoryDevice struct {
 	incoming *packetQueue
 	outgoing *packetQueue
 
-	mu         sync.RWMutex
+	mu           sync.RWMutex
 	assignedIPv4 *netip.Prefix
 	assignedIPv6 *netip.Prefix
-	mtu      int
-	noTun    bool
+	mtu          int
+	noTun        bool
 }
 
 type memoryLink struct {

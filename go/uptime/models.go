@@ -87,42 +87,42 @@ func (r CreateNodeRequest) Validate() error {
 
 // UpdateNodeRequest for admin.
 type UpdateNodeRequest struct {
-	Name           *string  `json:"name"`
-	Host           *string  `json:"host"`
-	Port           *int     `json:"port"`
-	Protocol       *string  `json:"protocol"`
-	Description    *string  `json:"description"`
-	MaxConnections *int     `json:"max_connections"`
-	IsActive       *bool    `json:"is_active"`
-	AllowRelay     *bool    `json:"allow_relay"`
-	NetworkName    *string  `json:"network_name"`
-	NetworkSecret  *string  `json:"network_secret"`
-	QQNumber       *string  `json:"qq_number"`
-	Wechat         *string  `json:"wechat"`
-	Mail           *string  `json:"mail"`
+	Name           *string   `json:"name"`
+	Host           *string   `json:"host"`
+	Port           *int      `json:"port"`
+	Protocol       *string   `json:"protocol"`
+	Description    *string   `json:"description"`
+	MaxConnections *int      `json:"max_connections"`
+	IsActive       *bool     `json:"is_active"`
+	AllowRelay     *bool     `json:"allow_relay"`
+	NetworkName    *string   `json:"network_name"`
+	NetworkSecret  *string   `json:"network_secret"`
+	QQNumber       *string   `json:"qq_number"`
+	Wechat         *string   `json:"wechat"`
+	Mail           *string   `json:"mail"`
 	Tags           *[]string `json:"tags"`
 }
 
 // NodeResponse mirrors Rust NodeResponse with health ring.
 type NodeResponse struct {
-	ID               int       `json:"id"`
-	Name             string    `json:"name"`
-	Host             string    `json:"host"`
-	Port             int       `json:"port"`
-	Protocol         string    `json:"protocol"`
-	Version          *string   `json:"version"`
-	Description      *string   `json:"description"`
-	MaxConnections   int       `json:"max_connections"`
-	CurrentConnections int    `json:"current_connections"`
-	IsActive         bool      `json:"is_active"`
-	IsApproved       bool      `json:"is_approved"`
-	AllowRelay       bool      `json:"allow_relay"`
-	NetworkName      *string   `json:"network_name"`
-	NetworkSecret    *string   `json:"network_secret"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-	Address          string    `json:"address"`
-	UsagePercentage  float64   `json:"usage_percentage"`
+	ID                 int       `json:"id"`
+	Name               string    `json:"name"`
+	Host               string    `json:"host"`
+	Port               int       `json:"port"`
+	Protocol           string    `json:"protocol"`
+	Version            *string   `json:"version"`
+	Description        *string   `json:"description"`
+	MaxConnections     int       `json:"max_connections"`
+	CurrentConnections int       `json:"current_connections"`
+	IsActive           bool      `json:"is_active"`
+	IsApproved         bool      `json:"is_approved"`
+	AllowRelay         bool      `json:"allow_relay"`
+	NetworkName        *string   `json:"network_name"`
+	NetworkSecret      *string   `json:"network_secret"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	Address            string    `json:"address"`
+	UsagePercentage    float64   `json:"usage_percentage"`
 
 	CurrentHealthStatus *string    `json:"current_health_status"`
 	LastCheckTime       *time.Time `json:"last_check_time"`
@@ -172,7 +172,7 @@ func nodeToResponse(n *SharedNode) NodeResponse {
 		Address: addr, UsagePercentage: usage,
 		HealthRecordTotalCounterRing: []uint64{}, HealthRecordHealthyCounterRing: []uint64{},
 		RingGranularity: 0,
-		QQNumber: qq, Wechat: wechat, Mail: mail, Tags: []string{},
+		QQNumber:        qq, Wechat: wechat, Mail: mail, Tags: []string{},
 	}
 }
 
@@ -225,9 +225,9 @@ func recordToResponse(r *HealthRecord) HealthRecordResponse {
 // Filters
 
 type NodeFilterParams struct {
-	IsActive *bool  `json:"is_active"`
-	Protocol *string `json:"protocol"`
-	Search   *string `json:"search"`
+	IsActive *bool    `json:"is_active"`
+	Protocol *string  `json:"protocol"`
+	Search   *string  `json:"search"`
 	Tags     []string `json:"tags"`
 }
 
@@ -269,7 +269,7 @@ type apiError struct {
 
 func (e *apiError) Error() string { return e.msg }
 
-func errBadRequest(msg string) error { return &apiError{status: 400, msg: msg} }
-func errNotFound(msg string) error  { return &apiError{status: 404, msg: msg} }
+func errBadRequest(msg string) error   { return &apiError{status: 400, msg: msg} }
+func errNotFound(msg string) error     { return &apiError{status: 404, msg: msg} }
 func errUnauthorized(msg string) error { return &apiError{status: 401, msg: msg} }
-func errInternal(msg string) error { return &apiError{status: 500, msg: msg} }
+func errInternal(msg string) error     { return &apiError{status: 500, msg: msg} }

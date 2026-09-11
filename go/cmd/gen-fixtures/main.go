@@ -105,10 +105,22 @@ func newPacketCompressed(name string, from, to uint32, pt, flags, fwd uint8, wir
 	payloadHex := hex.EncodeToString(wirePayload)
 	body := make([]byte, 16+len(wirePayload))
 	// little endian header
-	body[0] = byte(from); body[1] = byte(from >> 8); body[2] = byte(from >> 16); body[3] = byte(from >> 24)
-	body[4] = byte(to); body[5] = byte(to >> 8); body[6] = byte(to >> 16); body[7] = byte(to >> 24)
-	body[8] = pt; body[9] = flags; body[10] = fwd; body[11] = 0
-	body[12] = byte(origLen); body[13] = byte(origLen >> 8); body[14] = byte(origLen >> 16); body[15] = byte(origLen >> 24)
+	body[0] = byte(from)
+	body[1] = byte(from >> 8)
+	body[2] = byte(from >> 16)
+	body[3] = byte(from >> 24)
+	body[4] = byte(to)
+	body[5] = byte(to >> 8)
+	body[6] = byte(to >> 16)
+	body[7] = byte(to >> 24)
+	body[8] = pt
+	body[9] = flags
+	body[10] = fwd
+	body[11] = 0
+	body[12] = byte(origLen)
+	body[13] = byte(origLen >> 8)
+	body[14] = byte(origLen >> 16)
+	body[15] = byte(origLen >> 24)
 	copy(body[16:], wirePayload)
 	return PacketFixture{
 		Name: name, FromPeerID: from, ToPeerID: to, PacketType: pt, Flags: flags, ForwardCounter: fwd,
@@ -117,14 +129,14 @@ func newPacketCompressed(name string, from, to uint32, pt, flags, fwd uint8, wir
 }
 
 type HandshakeFixture struct {
-	Name                    string   `json:"name"`
-	Magic                   uint32   `json:"magic"`
-	MyPeerID                uint32   `json:"my_peer_id"`
-	Version                 uint32   `json:"version"`
-	Features                []string `json:"features"`
-	NetworkName             string   `json:"network_name"`
-	NetworkSecretDigestHex  string   `json:"network_secret_digest_hex"`
-	WireHex                 string   `json:"wire_hex"`
+	Name                   string   `json:"name"`
+	Magic                  uint32   `json:"magic"`
+	MyPeerID               uint32   `json:"my_peer_id"`
+	Version                uint32   `json:"version"`
+	Features               []string `json:"features"`
+	NetworkName            string   `json:"network_name"`
+	NetworkSecretDigestHex string   `json:"network_secret_digest_hex"`
+	WireHex                string   `json:"wire_hex"`
 }
 
 func genHandshake(out string) error {
@@ -179,17 +191,17 @@ type RpcDescriptorFixture struct {
 	WireHex     string `json:"wire_hex"`
 }
 type RpcPacketFixture struct {
-	Name          string                  `json:"name"`
-	FromPeer      uint32                  `json:"from_peer"`
-	ToPeer        uint32                  `json:"to_peer"`
-	TransactionID int64                   `json:"transaction_id"`
-	Descriptor    *RpcDescriptorFixture   `json:"descriptor"`
-	BodyHex       string                  `json:"body_hex"`
-	IsRequest     bool                    `json:"is_request"`
-	TotalPieces   uint32                  `json:"total_pieces"`
-	PieceIdx      uint32                  `json:"piece_idx"`
-	TraceID       int32                   `json:"trace_id"`
-	WireHex       string                  `json:"wire_hex"`
+	Name          string                `json:"name"`
+	FromPeer      uint32                `json:"from_peer"`
+	ToPeer        uint32                `json:"to_peer"`
+	TransactionID int64                 `json:"transaction_id"`
+	Descriptor    *RpcDescriptorFixture `json:"descriptor"`
+	BodyHex       string                `json:"body_hex"`
+	IsRequest     bool                  `json:"is_request"`
+	TotalPieces   uint32                `json:"total_pieces"`
+	PieceIdx      uint32                `json:"piece_idx"`
+	TraceID       int32                 `json:"trace_id"`
+	WireHex       string                `json:"wire_hex"`
 }
 
 func genRPC(out string) error {
@@ -236,11 +248,11 @@ func genConfig(out string) error {
 }
 
 type WGFixture struct {
-	Name         string `json:"name"`
-	PayloadLen   int    `json:"payload_len"`
-	PeerHeaderLen int   `json:"peer_header_len"`
-	HeaderHex    string `json:"header_hex"`
-	TotalLen     int    `json:"total_len"`
+	Name          string `json:"name"`
+	PayloadLen    int    `json:"payload_len"`
+	PeerHeaderLen int    `json:"peer_header_len"`
+	HeaderHex     string `json:"header_hex"`
+	TotalLen      int    `json:"total_len"`
 }
 
 func wgHeader(payloadLen int) []byte {
@@ -250,13 +262,22 @@ func wgHeader(payloadLen int) []byte {
 	total := payloadLen + 16 + 20
 	h[2] = byte(total >> 8)
 	h[3] = byte(total)
-	h[4] = 0; h[5] = 0
-	h[6] = 0; h[7] = 0
+	h[4] = 0
+	h[5] = 0
+	h[6] = 0
+	h[7] = 0
 	h[8] = 64
 	h[9] = 0
-	h[10] = 0; h[11] = 0
-	h[12]=0; h[13]=0; h[14]=0; h[15]=0
-	h[16]=0; h[17]=0; h[18]=0; h[19]=0
+	h[10] = 0
+	h[11] = 0
+	h[12] = 0
+	h[13] = 0
+	h[14] = 0
+	h[15] = 0
+	h[16] = 0
+	h[17] = 0
+	h[18] = 0
+	h[19] = 0
 	return h
 }
 
@@ -271,25 +292,35 @@ func genWG(out string) error {
 }
 
 type SecureFixture struct {
-	Name        string `json:"name"`
-	Suite       string `json:"suite"`
-	SuiteID     uint8  `json:"suite_id"`
-	RootKeyHex  string `json:"root_key_hex"`
-	Epoch       uint32 `json:"epoch"`
-	Seq         uint64 `json:"seq"`
+	Name         string `json:"name"`
+	Suite        string `json:"suite"`
+	SuiteID      uint8  `json:"suite_id"`
+	RootKeyHex   string `json:"root_key_hex"`
+	Epoch        uint32 `json:"epoch"`
+	Seq          uint64 `json:"seq"`
 	PlaintextHex string `json:"plaintext_hex"`
-	WireHex     string `json:"wire_hex"`
-	NonceHex    string `json:"nonce_hex"`
+	WireHex      string `json:"wire_hex"`
+	NonceHex     string `json:"nonce_hex"`
 }
 
 func genSecure(out string) error {
 	rootKey := make([]byte, 32)
-	for i := range rootKey { rootKey[i] = 0x11 }
+	for i := range rootKey {
+		rootKey[i] = 0x11
+	}
 	rootKey2 := make([]byte, 32)
-	for i := range rootKey2 { rootKey2[i] = byte(i) }
+	for i := range rootKey2 {
+		rootKey2[i] = byte(i)
+	}
 	fixtures := []SecureFixture{}
-	for _, tc := range []struct{
-		name string; suite peer.CipherSuite; suiteName string; key []byte; epoch uint32; seq uint64; pt []byte;
+	for _, tc := range []struct {
+		name      string
+		suite     peer.CipherSuite
+		suiteName string
+		key       []byte
+		epoch     uint32
+		seq       uint64
+		pt        []byte
 	}{
 		{"aes128-epoch0-seq0", peer.CipherSuiteAESGCM, "aes-gcm", rootKey, 0, 0, []byte("hello world")},
 		{"aes128-epoch1-seq5", peer.CipherSuiteAESGCM, "aes-gcm", rootKey, 1, 5, []byte("test")},
@@ -298,12 +329,16 @@ func genSecure(out string) error {
 		{"chacha20-empty", peer.CipherSuiteChaCha20Poly1305, "chacha20", rootKey2, 0, 0, []byte{}},
 	} {
 		s2, err := peer.NewSecureDatagramSession(tc.key, tc.suite, tc.epoch, peer.DirectionInitiatorToResponder, peer.DirectionResponderToInitiator)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		for i := uint64(0); i < tc.seq; i++ {
 			_, _ = s2.Seal([]byte("pad"))
 		}
 		wire, err := s2.Seal(tc.pt)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		nonce := wire[len(wire)-12:]
 		fixtures = append(fixtures, SecureFixture{
 			Name: tc.name, Suite: tc.suiteName, SuiteID: uint8(tc.suite), RootKeyHex: hex.EncodeToString(tc.key), Epoch: tc.epoch, Seq: tc.seq,
@@ -319,39 +354,46 @@ type RouteFixture struct {
 	Links          []Link  `json:"links"`
 	ExpectedRoutes []Route `json:"expected_routes"`
 }
-type Link struct { A, B, Cost uint32 }
-type Route struct { Destination, NextHop uint32; Cost uint64 }
+type Link struct{ A, B, Cost uint32 }
+type Route struct {
+	Destination, NextHop uint32
+	Cost                 uint64
+}
 
 func genRoute(out string) error {
 	fixtures := []RouteFixture{
 		{
 			Name: "line-3", LocalPeerID: 1,
-			Links: []Link{{1,2,10},{2,3,10}},
-			ExpectedRoutes: []Route{{2,2,10},{3,2,20}},
+			Links:          []Link{{1, 2, 10}, {2, 3, 10}},
+			ExpectedRoutes: []Route{{2, 2, 10}, {3, 2, 20}},
 		},
 		{
 			Name: "triangle", LocalPeerID: 1,
-			Links: []Link{{1,2,5},{2,3,5},{1,3,15}},
-			ExpectedRoutes: []Route{{2,2,5},{3,2,10}},
+			Links:          []Link{{1, 2, 5}, {2, 3, 5}, {1, 3, 15}},
+			ExpectedRoutes: []Route{{2, 2, 5}, {3, 2, 10}},
 		},
 		{
 			Name: "equal-cost", LocalPeerID: 1,
-			Links: []Link{{1,2,10},{1,3,10},{2,4,10},{3,4,10}},
-			ExpectedRoutes: []Route{{2,2,10},{3,3,10},{4,2,20}},
+			Links:          []Link{{1, 2, 10}, {1, 3, 10}, {2, 4, 10}, {3, 4, 10}},
+			ExpectedRoutes: []Route{{2, 2, 10}, {3, 3, 10}, {4, 2, 20}},
 		},
 		{
 			Name: "star-5", LocalPeerID: 1,
-			Links: []Link{{1,2,1},{1,3,1},{1,4,1},{1,5,1}},
-			ExpectedRoutes: []Route{{2,2,1},{3,3,1},{4,4,1},{5,5,1}},
+			Links:          []Link{{1, 2, 1}, {1, 3, 1}, {1, 4, 1}, {1, 5, 1}},
+			ExpectedRoutes: []Route{{2, 2, 1}, {3, 3, 1}, {4, 4, 1}, {5, 5, 1}},
 		},
 	}
 	// verify via Engine
 	for _, f := range fixtures {
 		e := route.NewEngine(f.LocalPeerID)
-		for _, l := range f.Links { e.AddLink(l.A, l.B, l.Cost) }
+		for _, l := range f.Links {
+			e.AddLink(l.A, l.B, l.Cost)
+		}
 		got := e.Snapshot()
 		m := make(map[uint32]Route)
-		for _, r := range got { m[r.Destination] = Route{r.Destination, r.NextHop, r.Cost} }
+		for _, r := range got {
+			m[r.Destination] = Route{r.Destination, r.NextHop, r.Cost}
+		}
 		for _, exp := range f.ExpectedRoutes {
 			if g, ok := m[exp.Destination]; !ok || g.NextHop != exp.NextHop || g.Cost != exp.Cost {
 				return fmt.Errorf("route fixture %q mismatch: got %+v want %+v", f.Name, g, exp)

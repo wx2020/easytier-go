@@ -15,8 +15,8 @@ type AndroidAdapter struct {
 
 var androidTunState = struct {
 	sync.Mutex
-	active   bool
-	activeFD int
+	active     bool
+	activeFD   int
 	activeName string
 }{activeFD: -1}
 

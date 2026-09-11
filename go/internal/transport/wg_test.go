@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/peer"
+	"github.com/EasyTier/EasyTier/go/internal/protocol"
 )
 
 func TestWGSyntheticHeaderInterop(t *testing.T) {

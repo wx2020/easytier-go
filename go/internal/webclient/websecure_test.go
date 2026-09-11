@@ -167,12 +167,12 @@ func TestWebSecureOverUDPAndWS(t *testing.T) {
 		scheme string
 	}{
 		{
-			name: "udp",
+			name:   "udp",
 			listen: func(s *Server) error { return s.ListenUDP("127.0.0.1:0") },
 			scheme: "udp",
 		},
 		{
-			name: "websocket",
+			name:   "websocket",
 			listen: func(s *Server) error { return s.ListenWebSocket("127.0.0.1:0") },
 			scheme: "ws",
 		},

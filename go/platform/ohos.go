@@ -249,11 +249,11 @@ func (a *OHOSAdapter) ClearTunAttached() {
 
 // RuntimeSnapshot mirrors ohrs RuntimeAggregateState
 type OHOSRuntimeSnapshot struct {
-	Configs      int  `json:"configs"`
-	ActiveKernels int `json:"active_kernels"`
-	TunAttached  bool `json:"tun_attached"`
-	TunFD        int  `json:"tun_fd"`
-	SocketServer bool `json:"socket_server"`
+	Configs       int  `json:"configs"`
+	ActiveKernels int  `json:"active_kernels"`
+	TunAttached   bool `json:"tun_attached"`
+	TunFD         int  `json:"tun_fd"`
+	SocketServer  bool `json:"socket_server"`
 }
 
 func (a *OHOSAdapter) GetRuntimeSnapshot() OHOSRuntimeSnapshot {

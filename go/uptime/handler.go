@@ -475,6 +475,7 @@ type sqlNullInt struct {
 	Int64 int64
 	Valid bool
 }
+
 func (n *sqlNullInt) Scan(value any) error {
 	if value == nil {
 		n.Valid = false
@@ -482,36 +483,45 @@ func (n *sqlNullInt) Scan(value any) error {
 	}
 	switch v := value.(type) {
 	case int64:
-		n.Int64 = v; n.Valid = true
+		n.Int64 = v
+		n.Valid = true
 	case int:
-		n.Int64 = int64(v); n.Valid = true
+		n.Int64 = int64(v)
+		n.Valid = true
 	case float64:
-		n.Int64 = int64(v); n.Valid = true
+		n.Int64 = int64(v)
+		n.Valid = true
 	default:
 		n.Valid = false
 	}
 	return nil
 }
+
 type sqlNullString struct {
 	String string
-	Valid bool
+	Valid  bool
 }
+
 func (n *sqlNullString) Scan(value any) error {
 	if value == nil {
 		n.Valid = false
 		return nil
 	}
 	if s, ok := value.(string); ok {
-		n.String = s; n.Valid = true
+		n.String = s
+		n.Valid = true
 	} else if b, ok := value.([]byte); ok {
-		n.String = string(b); n.Valid = true
+		n.String = string(b)
+		n.Valid = true
 	}
 	return nil
 }
+
 type sqlNullTime struct {
-	Time time.Time
+	Time  time.Time
 	Valid bool
 }
+
 func (n *sqlNullTime) Scan(value any) error {
 	if value == nil {
 		n.Valid = false
@@ -519,20 +529,25 @@ func (n *sqlNullTime) Scan(value any) error {
 	}
 	switch v := value.(type) {
 	case time.Time:
-		n.Time = v; n.Valid = true
+		n.Time = v
+		n.Valid = true
 	case string:
 		// try parse
 		if t, err := time.Parse("2006-01-02 15:04:05", v); err == nil {
-			n.Time = t; n.Valid = true
+			n.Time = t
+			n.Valid = true
 		} else if t, err := time.Parse(time.RFC3339, v); err == nil {
-			n.Time = t; n.Valid = true
+			n.Time = t
+			n.Valid = true
 		}
 	case []byte:
 		s := string(v)
 		if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
-			n.Time = t; n.Valid = true
+			n.Time = t
+			n.Valid = true
 		} else if t, err := time.Parse(time.RFC3339, s); err == nil {
-			n.Time = t; n.Valid = true
+			n.Time = t
+			n.Valid = true
 		}
 	}
 	return nil

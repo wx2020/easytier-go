@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	relayHandshakeTimeout   = 5 * time.Second
-	relayRetryBaseMs        = 200 * time.Millisecond
-	relayMaxAttempts        = 3
+	relayHandshakeTimeout    = 5 * time.Second
+	relayRetryBaseMs         = 200 * time.Millisecond
+	relayMaxAttempts         = 3
 	maxPendingPacketsPerPeer = 32
 )
 
@@ -31,9 +31,9 @@ type RelayManager struct {
 }
 
 type relayPeerState struct {
-	lastActive  time.Time
+	lastActive   time.Time
 	failureCount uint32
-	nextRetryAt *time.Time
+	nextRetryAt  *time.Time
 }
 
 type pendingEntry struct {

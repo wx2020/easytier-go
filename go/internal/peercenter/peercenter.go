@@ -33,8 +33,8 @@ type PeerInfoProvider interface {
 
 // PeerRoute describes one reachable route for center-peer selection.
 type PeerRoute struct {
-	PeerID          uint32
-	IsPublicServer  bool
+	PeerID         uint32
+	IsPublicServer bool
 }
 
 // SelectCenterPeer returns the peer ID with the smallest non-public-server ID,
@@ -231,10 +231,10 @@ type Runner struct {
 	routes   func() []PeerRoute
 	job      JobFunc
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	mu     sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	mu      sync.Mutex
 	running bool
 }
 

@@ -10,9 +10,9 @@ import (
 )
 
 type CleanupManager struct {
-	OS       string
-	IfName   string
-	Applied  []Action
+	OS        string
+	IfName    string
+	Applied   []Action
 	Rollbacks [][]string
 }
 

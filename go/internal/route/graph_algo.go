@@ -187,10 +187,10 @@ type DirectPeerInfo struct {
 }
 
 type globalPeerMapCostCalculator struct {
-	globalPeerMap        map[PeerID]GlobalPeerMapEntry
-	globalPeerMapSnap    map[PeerID]GlobalPeerMapEntry
-	lastUpdateTime       int64
-	mapUpdateTime        *int64
+	globalPeerMap     map[PeerID]GlobalPeerMapEntry
+	globalPeerMapSnap map[PeerID]GlobalPeerMapEntry
+	lastUpdateTime    int64
+	mapUpdateTime     *int64
 }
 
 func NewRouteCostCalculator(globalPeerMap map[PeerID]GlobalPeerMapEntry, mapUpdateTime *int64) RouteCostCalculator {
@@ -268,5 +268,3 @@ func ComputeMultiPathRoutes(globalPeerMap map[PeerID]GlobalPeerMapEntry, start P
 	}
 	return nextHops
 }
-
-

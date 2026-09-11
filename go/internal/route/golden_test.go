@@ -23,8 +23,8 @@ func TestGoldenRouteFixtures(t *testing.T) {
 		t.Fatalf("read route fixtures: %v", err)
 	}
 	var fixtures []struct {
-		Name           string `json:"name"`
-		LocalPeerID    uint32 `json:"local_peer_id"`
+		Name           string                        `json:"name"`
+		LocalPeerID    uint32                        `json:"local_peer_id"`
 		Links          []struct{ A, B, Cost uint32 } `json:"links"`
 		ExpectedRoutes []struct {
 			Destination uint32 `json:"Destination"`

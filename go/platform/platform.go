@@ -22,10 +22,10 @@ const (
 )
 
 var (
-	ErrUnsupported      = errors.New("platform adapter not implemented for " + runtime.GOOS)
-	ErrInvalidConfig    = errors.New("invalid platform configuration")
-	ErrInvalidMTU       = errors.New("invalid MTU")
-	ErrOneActiveTUN     = errors.New("Android VpnService allows only one active TUN")
+	ErrUnsupported        = errors.New("platform adapter not implemented for " + runtime.GOOS)
+	ErrInvalidConfig      = errors.New("invalid platform configuration")
+	ErrInvalidMTU         = errors.New("invalid MTU")
+	ErrOneActiveTUN       = errors.New("Android VpnService allows only one active TUN")
 	ErrRequiresPrivileged = errors.New("operation requires privileged execution")
 )
 
@@ -50,8 +50,8 @@ type BaseAdapter struct {
 	os string
 }
 
-func (b *BaseAdapter) OS() string       { return b.os }
-func (b *BaseAdapter) Version() string  { return Version }
+func (b *BaseAdapter) OS() string         { return b.os }
+func (b *BaseAdapter) Version() string    { return Version }
 func (b *BaseAdapter) IsPrivileged() bool { return isPrivileged() }
 
 // New returns an adapter for the current runtime.GOOS.
@@ -96,9 +96,9 @@ func (a *GenericAdapter) PlanDNS(cfg DNSConfig) (Plan, error) {
 func (a *GenericAdapter) PlanService(cfg ServiceConfig) (Plan, error) {
 	return Plan{}, ErrUnsupported
 }
-func (a *GenericAdapter) ApplyTun(cfg TunConfig) error    { return ErrUnsupported }
-func (a *GenericAdapter) ApplyRoutes(cfg RouteConfig) error { return ErrUnsupported }
-func (a *GenericAdapter) ApplyDNS(cfg DNSConfig) error   { return ErrUnsupported }
+func (a *GenericAdapter) ApplyTun(cfg TunConfig) error         { return ErrUnsupported }
+func (a *GenericAdapter) ApplyRoutes(cfg RouteConfig) error    { return ErrUnsupported }
+func (a *GenericAdapter) ApplyDNS(cfg DNSConfig) error         { return ErrUnsupported }
 func (a *GenericAdapter) ApplyService(cfg ServiceConfig) error { return ErrUnsupported }
 
 // isPrivileged reports whether the current process has elevated privileges.

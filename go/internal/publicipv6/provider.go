@@ -12,10 +12,10 @@ import (
 
 // Provider advertises a /64 and leases /80s.
 type Provider struct {
-	mu        sync.Mutex
-	prefix    netip.Prefix
-	leases    map[string]lease
-	ttl       time.Duration
+	mu     sync.Mutex
+	prefix netip.Prefix
+	leases map[string]lease
+	ttl    time.Duration
 }
 type lease struct {
 	addr    netip.Addr

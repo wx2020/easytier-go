@@ -12,10 +12,10 @@ import (
 
 // ICMPv6 message types used by NDP (RFC 4861).
 const (
-	icmpv6TypeRouterSolicitation     = 133
-	icmpv6TypeRouterAdvertisement    = 134
-	icmpv6TypeNeighborSolicitation   = 135
-	icmpv6TypeNeighborAdvertisement  = 136
+	icmpv6TypeRouterSolicitation    = 133
+	icmpv6TypeRouterAdvertisement   = 134
+	icmpv6TypeNeighborSolicitation  = 135
+	icmpv6TypeNeighborAdvertisement = 136
 )
 
 // NDP option types (RFC 4861 section 4.6).
@@ -99,8 +99,8 @@ func (ra RouterAdvertisement) Marshal(src, dst netip.Addr) ([]byte, error) {
 	}
 
 	const (
-		raHeaderLen    = 16
-		prefixOptLen    = 32
+		raHeaderLen  = 16
+		prefixOptLen = 32
 	)
 	message := make([]byte, raHeaderLen+prefixOptLen)
 	message[0] = icmpv6TypeRouterAdvertisement

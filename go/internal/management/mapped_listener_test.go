@@ -17,10 +17,10 @@ func TestMappedListenerAddRemoveViaManager(t *testing.T) {
 	mgr := mapping.NewManager(nil)
 	cfg := config.Config{NetworkIdentity: config.NetworkIdentity{NetworkName: "mesh"}}
 	service := NewServiceWithOptions(ServiceOptions{
-		NodeInfo: NodeInfo{ID: "node"},
-		Config:   &cfg,
+		NodeInfo:        NodeInfo{ID: "node"},
+		Config:          &cfg,
 		MappedListeners: &mappingManagerAdapter{mgr},
-		UpdateConfig: func(context.Context, config.Config) error { return nil },
+		UpdateConfig:    func(context.Context, config.Config) error { return nil },
 	})
 	server, err := rpc.NewServer([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, service.Handler)
 	if err != nil {

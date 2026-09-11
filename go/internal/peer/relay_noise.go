@@ -14,9 +14,9 @@ import (
 	"github.com/flynn/noise"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/EasyTier/EasyTier/go/internal/protocol"
-	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 	commonpb "github.com/EasyTier/EasyTier/go/internal/proto/common"
+	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
+	"github.com/EasyTier/EasyTier/go/internal/protocol"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 
 // RelayHandshakeConfig contains identities for a relay IK handshake.
 type RelayHandshakeConfig struct {
-	LocalPeerID  uint32
+	LocalPeerID   uint32
 	StaticKeypair noise.DHKey
 	// RemoteStatic is the responder's static public key (32 bytes), required for IK initiator.
 	RemoteStatic []byte

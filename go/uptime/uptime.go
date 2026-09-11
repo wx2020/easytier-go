@@ -23,30 +23,30 @@ type Config struct {
 	Interval int    `json:"interval"` // seconds, health-check interval
 
 	// Extended fields mirroring Rust AppConfig
-	ListenAddr        string `json:"listen_addr"`
-	AdminPassword     string `json:"admin_password"`
-	JWTSecret         string `json:"jwt_secret"`
-	HealthCheckTimeout int   `json:"health_check_timeout"` // seconds
-	MaxRetries         int   `json:"max_retries"`
+	ListenAddr         string `json:"listen_addr"`
+	AdminPassword      string `json:"admin_password"`
+	JWTSecret          string `json:"jwt_secret"`
+	HealthCheckTimeout int    `json:"health_check_timeout"` // seconds
+	MaxRetries         int    `json:"max_retries"`
 
-	CleanupRetentionDays     int `json:"cleanup_retention_days"`
-	MaxHealthRecordsPerNode int  `json:"max_health_records_per_node"`
+	CleanupRetentionDays    int `json:"cleanup_retention_days"`
+	MaxHealthRecordsPerNode int `json:"max_health_records_per_node"`
 	CleanupIntervalSec      int `json:"cleanup_interval_sec"`
 }
 
 // DefaultConfig returns a config with Rust-compatible defaults.
 func DefaultConfig() Config {
 	return Config{
-		DBPath:                   "uptime.db",
-		Interval:                 30,
-		ListenAddr:               "127.0.0.1:8080",
-		AdminPassword:            "admin123",
-		JWTSecret:                "default-jwt-secret",
-		HealthCheckTimeout:       10,
-		MaxRetries:               3,
-		CleanupRetentionDays:     30,
-		MaxHealthRecordsPerNode:  70000,
-		CleanupIntervalSec:       1200,
+		DBPath:                  "uptime.db",
+		Interval:                30,
+		ListenAddr:              "127.0.0.1:8080",
+		AdminPassword:           "admin123",
+		JWTSecret:               "default-jwt-secret",
+		HealthCheckTimeout:      10,
+		MaxRetries:              3,
+		CleanupRetentionDays:    30,
+		MaxHealthRecordsPerNode: 70000,
+		CleanupIntervalSec:      1200,
 	}
 }
 

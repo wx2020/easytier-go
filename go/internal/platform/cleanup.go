@@ -11,9 +11,9 @@ import (
 // CleanupManager tracks applied state so it can be rolled back on normal exit
 // and provides crash-recovery detection for stale EasyTier interfaces.
 type CleanupManager struct {
-	OS       string
-	IfName   string
-	Applied  []PlannedAction
+	OS        string
+	IfName    string
+	Applied   []PlannedAction
 	Rollbacks [][]string
 }
 

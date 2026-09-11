@@ -62,11 +62,11 @@ func TestParseRouterAdvertisementBadChecksum(t *testing.T) {
 	src := netip.MustParseAddr("fd00::1")
 	dst := netip.MustParseAddr("ff02::1")
 	ra := RouterAdvertisement{
-		CurrentHopLimit: 64,
-		RouterLifetime:  1800 * time.Second,
-		Prefix:          netip.MustParsePrefix("fd00:1234:5678::/64"),
+		CurrentHopLimit:   64,
+		RouterLifetime:    1800 * time.Second,
+		Prefix:            netip.MustParsePrefix("fd00:1234:5678::/64"),
 		PreferredLifetime: 1800 * time.Second,
-		ValidLifetime:      3600 * time.Second,
+		ValidLifetime:     3600 * time.Second,
 	}
 	message, err := ra.Marshal(src, dst)
 	if err != nil {

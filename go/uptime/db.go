@@ -159,25 +159,25 @@ func (d *DB) Migrations() []string { return migrations }
 
 // SharedNode corresponds to shared_nodes table.
 type SharedNode struct {
-	ID                int       `json:"id"`
-	Name              string    `json:"name"`
-	Host              string    `json:"host"`
-	Port              int       `json:"port"`
-	Protocol          string    `json:"protocol"`
-	Version           string    `json:"version"`
-	AllowRelay        bool      `json:"allow_relay"`
-	NetworkName       string    `json:"network_name"`
-	NetworkSecret     string    `json:"network_secret"`
-	Description       string    `json:"description"`
-	MaxConnections    int       `json:"max_connections"`
-	CurrentConnections int      `json:"current_connections"`
-	IsActive          bool      `json:"is_active"`
-	IsApproved        bool      `json:"is_approved"`
-	QQNumber          string    `json:"qq_number"`
-	Wechat            string    `json:"wechat"`
-	Mail              string    `json:"mail"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 int       `json:"id"`
+	Name               string    `json:"name"`
+	Host               string    `json:"host"`
+	Port               int       `json:"port"`
+	Protocol           string    `json:"protocol"`
+	Version            string    `json:"version"`
+	AllowRelay         bool      `json:"allow_relay"`
+	NetworkName        string    `json:"network_name"`
+	NetworkSecret      string    `json:"network_secret"`
+	Description        string    `json:"description"`
+	MaxConnections     int       `json:"max_connections"`
+	CurrentConnections int       `json:"current_connections"`
+	IsActive           bool      `json:"is_active"`
+	IsApproved         bool      `json:"is_approved"`
+	QQNumber           string    `json:"qq_number"`
+	Wechat             string    `json:"wechat"`
+	Mail               string    `json:"mail"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // HealthRecord corresponds to health_records.
@@ -223,14 +223,14 @@ func (r HealthRecord) IsHealthy() bool { return ParseHealthStatus(r.Status) == H
 
 // HealthStats mirrors Rust HealthStats.
 type HealthStats struct {
-	TotalChecks         uint64      `json:"total_checks"`
-	HealthyCount        uint64      `json:"healthy_count"`
-	UnhealthyCount      uint64      `json:"unhealthy_count"`
-	HealthPercentage    float64     `json:"health_percentage"`
-	AverageResponseTime *float64    `json:"average_response_time"`
-	UptimePercentage    float64     `json:"uptime_percentage"`
-	LastCheckTime       *time.Time  `json:"last_check_time"`
-	LastStatus          *string     `json:"last_status"`
+	TotalChecks         uint64     `json:"total_checks"`
+	HealthyCount        uint64     `json:"healthy_count"`
+	UnhealthyCount      uint64     `json:"unhealthy_count"`
+	HealthPercentage    float64    `json:"health_percentage"`
+	AverageResponseTime *float64   `json:"average_response_time"`
+	UptimePercentage    float64    `json:"uptime_percentage"`
+	LastCheckTime       *time.Time `json:"last_check_time"`
+	LastStatus          *string    `json:"last_status"`
 }
 
 // DatabaseStats mirrors Rust DatabaseStats.

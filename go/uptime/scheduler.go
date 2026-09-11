@@ -153,8 +153,8 @@ func NewScheduler(db *DB, interval, timeout time.Duration, checkFunc func(node *
 	}
 	return &Scheduler{
 		db: db, interval: interval, timeout: timeout,
-		records: make(map[int]*HealthyMemRecord),
-		stopCh: make(chan struct{}),
+		records:   make(map[int]*HealthyMemRecord),
+		stopCh:    make(chan struct{}),
 		checkFunc: checkFunc,
 	}
 }

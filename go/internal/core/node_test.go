@@ -407,13 +407,13 @@ func TestManagedNodeTUNWithDHCPAndStaticAssignment(t *testing.T) {
 	}
 	// Use DHCP and static IPv6 together
 	node, err := ListenWithOptions(NodeOptions{
-		Address:     "127.0.0.1:0",
-		PeerManager: peer.PeerConnectionManagerConfig{LocalPeerID: identity.PeerID, LegacyIdentity: identity},
-		TUN:         tunDevice,
-		TUNMTU:      0, // should be defaulted via EffectiveMTU
-		TUNDestination: 11,
-		DHCP:        true,
-		IPv6:        "fd00::55/64",
+		Address:          "127.0.0.1:0",
+		PeerManager:      peer.PeerConnectionManagerConfig{LocalPeerID: identity.PeerID, LegacyIdentity: identity},
+		TUN:              tunDevice,
+		TUNMTU:           0, // should be defaulted via EffectiveMTU
+		TUNDestination:   11,
+		DHCP:             true,
+		IPv6:             "fd00::55/64",
 		EnableEncryption: true,
 	})
 	if err != nil {
@@ -467,19 +467,19 @@ func TestTwoNodeTUNTransfersICMPAndTCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodeA, err := ListenWithOptions(NodeOptions{
-		Address: "127.0.0.1:0",
+		Address:     "127.0.0.1:0",
 		PeerManager: peer.PeerConnectionManagerConfig{LocalPeerID: identityA.PeerID, LegacyIdentity: identityA},
-		TUN: tunA, TUNMTU: 1500, TUNDestination: identityB.PeerID,
+		TUN:         tunA, TUNMTU: 1500, TUNDestination: identityB.PeerID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addrA := nodeA.Address().String()
 	nodeB, err := ListenWithOptions(NodeOptions{
-		Address: "127.0.0.1:0",
-		Peers:   []string{addrA},
+		Address:     "127.0.0.1:0",
+		Peers:       []string{addrA},
 		PeerManager: peer.PeerConnectionManagerConfig{LocalPeerID: identityB.PeerID, LegacyIdentity: identityB},
-		TUN: tunB, TUNMTU: 1500, TUNDestination: identityA.PeerID,
+		TUN:         tunB, TUNMTU: 1500, TUNDestination: identityA.PeerID,
 	})
 	if err != nil {
 		t.Fatal(err)

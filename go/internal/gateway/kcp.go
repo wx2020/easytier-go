@@ -40,12 +40,12 @@ type KCPProxy struct {
 	listener net.Listener
 	dstAddr  string
 
-	mu       sync.RWMutex
-	entries  map[string]*kcpEntry
-	nextID   atomic.Uint64
-	closed   bool
-	closeCh  chan struct{}
-	wg       sync.WaitGroup
+	mu      sync.RWMutex
+	entries map[string]*kcpEntry
+	nextID  atomic.Uint64
+	closed  bool
+	closeCh chan struct{}
+	wg      sync.WaitGroup
 }
 
 type kcpEntry struct {

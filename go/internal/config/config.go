@@ -39,7 +39,9 @@ const (
 )
 
 func (p ConfigFilePermission) HasFlag(flag ConfigFilePermission) bool { return p&flag != 0 }
-func (p ConfigFilePermission) WithFlag(flag ConfigFilePermission) ConfigFilePermission { return p | flag }
+func (p ConfigFilePermission) WithFlag(flag ConfigFilePermission) ConfigFilePermission {
+	return p | flag
+}
 func (p ConfigFilePermission) RemoveFlag(flag ConfigFilePermission) ConfigFilePermission {
 	return p &^ flag
 }
@@ -54,52 +56,52 @@ type ConfigFileControl struct {
 // (READ_ONLY|NO_DELETE) like Rust ConfigFileControl::STATIC_CONFIG.
 var StaticConfigControl = ConfigFileControl{Permission: PermissionReadOnly | PermissionNoDelete}
 
-func (c ConfigFileControl) IsReadOnly() bool { return c.Permission.HasFlag(PermissionReadOnly) }
-func (c ConfigFileControl) IsNoDelete() bool { return c.Permission.HasFlag(PermissionNoDelete) }
+func (c ConfigFileControl) IsReadOnly() bool  { return c.Permission.HasFlag(PermissionReadOnly) }
+func (c ConfigFileControl) IsNoDelete() bool  { return c.Permission.HasFlag(PermissionNoDelete) }
 func (c ConfigFileControl) IsDeletable() bool { return !c.IsNoDelete() }
 
 // Config is the stable TOML shape used by the first Go core vertical slice.
 // Additional reference fields are added without changing these field names.
 type Config struct {
-	NetNS                  string           `toml:"netns"`
-	Hostname               string           `toml:"hostname"`
-	InstanceName           string           `toml:"instance_name"`
-	InstanceID             string           `toml:"instance_id"`
-	IPv4                   string           `toml:"ipv4"`
-	IPv6                   string           `toml:"ipv6"`
-	IPv6PublicAddrProvider bool             `toml:"ipv6_public_addr_provider"`
-	IPv6PublicAddrAuto     bool             `toml:"ipv6_public_addr_auto"`
-	IPv6PublicAddrPrefix   string           `toml:"ipv6_public_addr_prefix"`
-	DHCP                   bool             `toml:"dhcp"`
-	NetworkIdentity        NetworkIdentity  `toml:"network_identity"`
-	Listeners              []string         `toml:"listeners"`
-	MappedListeners        []string         `toml:"mapped_listeners"`
-	ExitNodes              []string         `toml:"exit_nodes"`
-	Peers                  []Peer           `toml:"peer"`
-	ProxyNetworks          []ProxyNetwork   `toml:"proxy_network"`
-	VPNPortalConfig        *VPNPortalConfig `toml:"vpn_portal_config"`
-	Routes                 []string         `toml:"routes"`
-	Socks5Proxy            string           `toml:"socks5_proxy"`
-	PortForwards           []PortForward    `toml:"port_forward"`
-	SecureMode             *SecureMode      `toml:"secure_mode"`
-	Flags                  *Flags           `toml:"flags"`
-	ACL                    *ACL             `toml:"acl"`
-	TCPWhitelist           []string         `toml:"tcp_whitelist"`
-	UDPWhitelist           []string         `toml:"udp_whitelist"`
-	STUNServers            []string         `toml:"stun_servers"`
-	STUNServersV6          []string         `toml:"stun_servers_v6"`
-	CredentialFile         string           `toml:"credential_file"`
-	Source                 string           `toml:"source"`
-	FileLogger             *FileLoggerConfig `toml:"file_logger"`
+	NetNS                  string               `toml:"netns"`
+	Hostname               string               `toml:"hostname"`
+	InstanceName           string               `toml:"instance_name"`
+	InstanceID             string               `toml:"instance_id"`
+	IPv4                   string               `toml:"ipv4"`
+	IPv6                   string               `toml:"ipv6"`
+	IPv6PublicAddrProvider bool                 `toml:"ipv6_public_addr_provider"`
+	IPv6PublicAddrAuto     bool                 `toml:"ipv6_public_addr_auto"`
+	IPv6PublicAddrPrefix   string               `toml:"ipv6_public_addr_prefix"`
+	DHCP                   bool                 `toml:"dhcp"`
+	NetworkIdentity        NetworkIdentity      `toml:"network_identity"`
+	Listeners              []string             `toml:"listeners"`
+	MappedListeners        []string             `toml:"mapped_listeners"`
+	ExitNodes              []string             `toml:"exit_nodes"`
+	Peers                  []Peer               `toml:"peer"`
+	ProxyNetworks          []ProxyNetwork       `toml:"proxy_network"`
+	VPNPortalConfig        *VPNPortalConfig     `toml:"vpn_portal_config"`
+	Routes                 []string             `toml:"routes"`
+	Socks5Proxy            string               `toml:"socks5_proxy"`
+	PortForwards           []PortForward        `toml:"port_forward"`
+	SecureMode             *SecureMode          `toml:"secure_mode"`
+	Flags                  *Flags               `toml:"flags"`
+	ACL                    *ACL                 `toml:"acl"`
+	TCPWhitelist           []string             `toml:"tcp_whitelist"`
+	UDPWhitelist           []string             `toml:"udp_whitelist"`
+	STUNServers            []string             `toml:"stun_servers"`
+	STUNServersV6          []string             `toml:"stun_servers_v6"`
+	CredentialFile         string               `toml:"credential_file"`
+	Source                 string               `toml:"source"`
+	FileLogger             *FileLoggerConfig    `toml:"file_logger"`
 	ConsoleLogger          *ConsoleLoggerConfig `toml:"console_logger"`
 }
 
 type FileLoggerConfig struct {
-	Level   string `toml:"level"`
-	Dir     string `toml:"dir"`
-	File    string `toml:"file"`
-	MaxSize int    `toml:"max_size"`
-	MaxCount int   `toml:"max_count"`
+	Level    string `toml:"level"`
+	Dir      string `toml:"dir"`
+	File     string `toml:"file"`
+	MaxSize  int    `toml:"max_size"`
+	MaxCount int    `toml:"max_count"`
 }
 
 type ConsoleLoggerConfig struct {

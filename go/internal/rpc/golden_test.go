@@ -75,10 +75,10 @@ func TestGoldenRpcPackets(t *testing.T) {
 		t.Fatalf("read rpc fixtures: %v", err)
 	}
 	var fixtures []struct {
-		Name          string  `json:"name"`
-		FromPeer      uint32  `json:"from_peer"`
-		ToPeer        uint32  `json:"to_peer"`
-		TransactionID int64   `json:"transaction_id"`
+		Name          string `json:"name"`
+		FromPeer      uint32 `json:"from_peer"`
+		ToPeer        uint32 `json:"to_peer"`
+		TransactionID int64  `json:"transaction_id"`
 		Descriptor    *struct {
 			DomainName  string `json:"domain_name"`
 			ProtoName   string `json:"proto_name"`

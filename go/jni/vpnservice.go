@@ -56,14 +56,14 @@ func (c VpnServiceConfig) Validate() error {
 
 // VpnServiceManager enforces one-active-TUN and VpnService permission lifecycle.
 type VpnServiceManager struct {
-	mu           sync.Mutex
-	state        VpnServiceState
-	activeTUN    string // instanceName holding TUN
-	activeFD     int
+	mu                sync.Mutex
+	state             VpnServiceState
+	activeTUN         string // instanceName holding TUN
+	activeFD          int
 	permissionGranted bool
-	builderActions []string
-	instanceFDs  map[string]int
-	lastError    string
+	builderActions    []string
+	instanceFDs       map[string]int
+	lastError         string
 }
 
 func NewVpnServiceManager() *VpnServiceManager {

@@ -78,19 +78,19 @@ type store struct {
 	mu sync.RWMutex
 
 	// in-memory tables
-	nextUserID      int
-	users           map[int]*userModel
-	usersByName     map[string]*userModel
-	nextGroupID     int
-	groups          map[int]*groupModel
-	groupsByName    map[string]*groupModel
-	nextPermID      int
-	perms           map[int]*permissionModel
-	permsByName     map[string]*permissionModel
-	usersGroups     map[int]map[int]bool // userID -> groupID -> true
-	groupsPerms     map[int]map[int]bool // groupID -> permID -> true
-	networkConfigs  map[string]*networkConfigModel // key: userID|deviceID|instID
-	nextNetCfgID    int
+	nextUserID     int
+	users          map[int]*userModel
+	usersByName    map[string]*userModel
+	nextGroupID    int
+	groups         map[int]*groupModel
+	groupsByName   map[string]*groupModel
+	nextPermID     int
+	perms          map[int]*permissionModel
+	permsByName    map[string]*permissionModel
+	usersGroups    map[int]map[int]bool           // userID -> groupID -> true
+	groupsPerms    map[int]map[int]bool           // groupID -> permID -> true
+	networkConfigs map[string]*networkConfigModel // key: userID|deviceID|instID
+	nextNetCfgID   int
 
 	// sessions: cookie -> userID
 	sessions map[string]int
@@ -468,4 +468,3 @@ func (s *store) setNetworkDisabled(userID int, deviceID, instID string, disabled
 func init() {
 	// ensure md5SumDirect is properly wired without import cycle
 }
-

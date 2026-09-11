@@ -25,12 +25,12 @@ const (
 type ProxyState string
 
 const (
-	StateSynReceived  ProxyState = "SynReceived"
-	StateConnecting   ProxyState = "ConnectingDst"
-	StateConnected    ProxyState = "Connected"
-	StateClosingSrc   ProxyState = "ClosingSrc"
-	StateClosingDst   ProxyState = "ClosingDst"
-	StateClosed       ProxyState = "Closed"
+	StateSynReceived ProxyState = "SynReceived"
+	StateConnecting  ProxyState = "ConnectingDst"
+	StateConnected   ProxyState = "Connected"
+	StateClosingSrc  ProxyState = "ClosingSrc"
+	StateClosingDst  ProxyState = "ClosingDst"
+	StateClosed      ProxyState = "Closed"
 )
 
 // ProxyEntry mirrors Rust TcpProxyEntry for status/RPC reporting.
@@ -78,13 +78,13 @@ func NewReliableChannel(lossRate float64, seed int64) *ReliableChannel {
 		lossRate = 0.99
 	}
 	ch := &ReliableChannel{
-		lossRate:     lossRate,
-		randSrc:      rand.New(rand.NewSource(seed)), //nolint:gosec
-		sendCh:       make(chan packet, 256),
-		ackCh:        make(chan uint32, 256),
-		deliveryCh:   make(chan []byte, 256),
-		done:         make(chan struct{}),
-		expectedSeq:  0,
+		lossRate:    lossRate,
+		randSrc:     rand.New(rand.NewSource(seed)), //nolint:gosec
+		sendCh:      make(chan packet, 256),
+		ackCh:       make(chan uint32, 256),
+		deliveryCh:  make(chan []byte, 256),
+		done:        make(chan struct{}),
+		expectedSeq: 0,
 	}
 	go ch.receiverLoop()
 	return ch

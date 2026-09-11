@@ -36,10 +36,10 @@ func TestPingIntervalControllerResetsOnLoss(t *testing.T) {
 	throughput := &ThroughputSnapshot{}
 	lossCount := &atomic.Uint32{}
 	controller := &pingIntervalController{
-		throughput:      throughput,
-		lossCount:       lossCount,
-		maxBackoffIdx:   maxBackoffIdx,
-		logicTime:       10,
+		throughput:        throughput,
+		lossCount:         lossCount,
+		maxBackoffIdx:     maxBackoffIdx,
+		logicTime:         10,
 		lastSendLogicTime: 0,
 	}
 
@@ -63,13 +63,13 @@ func TestPingIntervalControllerResetsOnLoss(t *testing.T) {
 func TestPingIntervalControllerSendsWhenTXWithoutRX(t *testing.T) {
 	throughput := &ThroughputSnapshot{}
 	controller := &pingIntervalController{
-		throughput:      throughput,
-		lossCount:       &atomic.Uint32{},
-		maxBackoffIdx:   maxBackoffIdx,
-		logicTime:       10,
+		throughput:        throughput,
+		lossCount:         &atomic.Uint32{},
+		maxBackoffIdx:     maxBackoffIdx,
+		logicTime:         10,
 		lastSendLogicTime: 0,
-		lastTXPackets:   100,
-		lastRXPackets:   100,
+		lastTXPackets:     100,
+		lastRXPackets:     100,
 	}
 
 	// TX grew but RX did not: ping more frequently.
@@ -97,8 +97,8 @@ func (m *mockChannel) Receive(ctx context.Context) (protocol.Packet, error) {
 func newPingerWithMockPeer(t *testing.T, myPeerID, peerID uint32) (*PeerConnPinger, *mockChannel) {
 	t.Helper()
 	manager, err := NewPeerConnectionManager(PeerConnectionManagerConfig{
-		LocalPeerID: myPeerID,
-		HandshakeMode: HandshakeModeLegacy,
+		LocalPeerID:    myPeerID,
+		HandshakeMode:  HandshakeModeLegacy,
 		LegacyIdentity: LegacyIdentity{PeerID: myPeerID, NetworkName: "test-net"},
 	})
 	if err != nil {
