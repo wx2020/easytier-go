@@ -234,25 +234,32 @@ func (s *FakeTCPSession) Receive(ctx context.Context) (protocol.Packet, error) {
 		return protocol.Packet{}, err
 	}
 	defer s.readMu.Unlock()
-	// Fast path: try receive channel first without blocking on conn.
+	// Fast path: deliver an already buffered packet without considering the
+	// close state, so frames that arrived before a peer-initiated shutdown
+	// are not dropped by the select below choosing <-s.done at random.
 	select {
-	case <-ctx.Done():
-		return protocol.Packet{}, ctx.Err()
-	case <-s.done:
-		return protocol.Packet{}, net.ErrClosed
 	case pkt := <-s.receive:
 		return pkt, nil
 	default:
 	}
 	stop := interruptReadOnCancel(ctx, s.conn)
 	defer stop()
-	select {
-	case <-ctx.Done():
-		return protocol.Packet{}, ctx.Err()
-	case <-s.done:
-		return protocol.Packet{}, net.ErrClosed
-	case pkt := <-s.receive:
-		return pkt, nil
+	for {
+		select {
+		case <-ctx.Done():
+			return protocol.Packet{}, ctx.Err()
+		case pkt := <-s.receive:
+			return pkt, nil
+		case <-s.done:
+			// readLoop enqueues frames before the connection error that
+			// triggers shutdown; drain once more before reporting closed.
+			select {
+			case pkt := <-s.receive:
+				return pkt, nil
+			default:
+				return protocol.Packet{}, net.ErrClosed
+			}
+		}
 	}
 }
 

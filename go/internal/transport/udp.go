@@ -378,17 +378,31 @@ func (s *UDPSession) Send(ctx context.Context, packet protocol.Packet) error {
 }
 
 // Receive waits for the next peer packet or for ctx/session cancellation.
+// Buffered packets take priority over session close so final frames that
+// raced with a peer FIN are still delivered.
 func (s *UDPSession) Receive(ctx context.Context) (protocol.Packet, error) {
 	if ctx == nil {
 		return protocol.Packet{}, errors.New("UDP receive context is nil")
 	}
 	select {
-	case <-ctx.Done():
-		return protocol.Packet{}, ctx.Err()
-	case <-s.done:
-		return protocol.Packet{}, net.ErrClosed
 	case packet := <-s.receive:
 		return packet, nil
+	default:
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return protocol.Packet{}, ctx.Err()
+		case packet := <-s.receive:
+			return packet, nil
+		case <-s.done:
+			select {
+			case packet := <-s.receive:
+				return packet, nil
+			default:
+				return protocol.Packet{}, net.ErrClosed
+			}
+		}
 	}
 }
 
