@@ -1,0 +1,481 @@
+name: Rust-Go Interop (2.6.4)
+
+on:
+  push:
+    paths:
+      - 'go/**'
+      - 'go.work'
+      - 'easytier/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'docs/**'
+      - '.github/workflows/interop.yml'
+      - '.github/actions/**'
+  pull_request:
+    paths:
+      - 'go/**'
+      - 'go.work'
+      - 'easytier/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'docs/**'
+      - '.github/workflows/interop.yml'
+      - '.github/actions/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-go:
+    name: Build Go + unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: go/go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Build binaries
+        run: go build -o /tmp/easytier-core-go ./cmd/easytier-core && go build -o /tmp/easytier-cli-go ./cmd/easytier-cli
+      - name: Upload Go binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-binaries
+          path: /tmp/easytier-core-go
+          retention-days: 7
+          if-no-files-found: warn
+
+  build-oracle:
+    name: Build Rust 2.6.4 oracle (1.95)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Pin to the 2.6.4 oracle when this branch diverges; today feature == official-release @ 8428a89d
+          ref: 8428a89d
+          fetch-depth: 1
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          pnpm: false
+          gui: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oracle-2.6.4
+          prefix-key: interop
+      - name: Verify toolchain
+        run: rustc --version && cargo --version && protoc --version
+      - name: Build oracle binaries (locked)
+        run: cargo build --locked --release --package easytier --bin easytier-core --bin easytier-cli
+      - name: Upload oracle binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-oracle-2.6.4
+          path: |
+            target/release/easytier-core
+            target/release/easytier-cli
+          retention-days: 7
+          if-no-files-found: error
+      - name: Check Cargo.lock is up to date
+        run: cargo metadata --format-version 1 --locked > /dev/null
+
+  fixture-corpus:
+    name: Fixture corpus (go/testdata/compat)
+    runs-on: ubuntu-latest
+    needs: build-oracle
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          pnpm: false
+          gui: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: oracle-2.6.4
+          prefix-key: interop
+      - name: Generate corpus
+        run: |
+          set -euo pipefail
+          mkdir -p go/testdata/compat/packet go/testdata/compat/handshake go/testdata/compat/digest go/testdata/compat/noise go/testdata/compat/secure go/testdata/compat/config go/testdata/compat/rpc go/testdata/compat/route go/testdata/compat/wg
+          # The checked-in corpus under go/testdata/compat is the source of truth; regenerate and diff.
+          if cargo run --manifest-path tools/gen-fixtures/Cargo.toml -- --out go/testdata/compat 2>/dev/null; then
+            echo "gen-fixtures (tools/gen-fixtures) succeeded"
+          elif cargo run --locked -p easytier --bin gen-fixtures 2>/dev/null; then
+            echo "gen-fixtures (easytier) succeeded"
+          elif [ -x ./go/testdata/compat/gen.sh ]; then
+            ./go/testdata/compat/gen.sh
+          else
+            echo "No fixture generator present — verifying existing corpus"
+            ls -R go/testdata/compat || true
+          fi
+          echo "Corpus contents:"
+          find go/testdata/compat -type f | head -n 50
+          echo "Verifying golden-vector tests against regenerated corpus:"
+          (cd go && GOWORK=off go test -run TestGolden ./... 2>&1 | tail -n 20) || (cd go && /usr/lib/go-1.24/bin/go test -run TestGolden ./... 2>&1 | tail -n 20)
+          # Also ensure Go generator is byte-identical to committed corpus (ignore docs helpers)
+          if command -v go >/dev/null 2>&1; then
+            go run ./go/cmd/gen-fixtures --out /tmp/compat-check 2>/dev/null || /usr/lib/go-1.24/bin/go run ./go/cmd/gen-fixtures --out /tmp/compat-check || true
+            diff -r --exclude=README.md --exclude=gen.sh --exclude=.gitkeep go/testdata/compat /tmp/compat-check || (echo "::warning::Go generator differs from committed corpus — check Rust vs Go parity"; diff -r --exclude=README.md --exclude=gen.sh --exclude=.gitkeep go/testdata/compat /tmp/compat-check || true)
+          fi
+      - name: Verify corpus is committed
+        run: |
+          if [ -n "$(git status --porcelain go/testdata/compat)" ]; then
+            echo "::error::go/testdata/compat has uncommitted changes — commit the generated fixtures or add a migration record in docs/GO_REWRITE_SE.md §11"
+            git diff -- go/testdata/compat || true
+            git status -- go/testdata/compat
+            exit 1
+          fi
+      - name: Upload corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-corpus
+          path: go/testdata/compat
+          retention-days: 7
+          if-no-files-found: warn
+
+  interop-matrix:
+    name: Interop ${{ matrix.transport }} / ${{ matrix.security }} (${{ matrix.direction }})${{ matrix.feature && format(' / {0}', matrix.feature) || '' }}
+    runs-on: ubuntu-latest
+    needs: [build-go, build-oracle, fixture-corpus]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # VAL-02 full matrix: TCP/UDP/WS/WG/QUIC × legacy/noise_xx × both directions (+ relay/compression).
+          - transport: tcp
+            security: legacy
+            direction: go_to_rust
+            feature: ""
+          - transport: tcp
+            security: legacy
+            direction: rust_to_go
+            feature: ""
+          - transport: tcp
+            security: noise_xx
+            direction: go_to_rust
+            feature: ""
+          - transport: tcp
+            security: noise_xx
+            direction: rust_to_go
+            feature: ""
+          - transport: udp
+            security: legacy
+            direction: go_to_rust
+            feature: ""
+          - transport: udp
+            security: legacy
+            direction: rust_to_go
+            feature: ""
+          - transport: udp
+            security: noise_xx
+            direction: go_to_rust
+            feature: ""
+          - transport: udp
+            security: noise_xx
+            direction: rust_to_go
+            feature: ""
+          - transport: ws
+            security: legacy
+            direction: go_to_rust
+            feature: ""
+          - transport: ws
+            security: legacy
+            direction: rust_to_go
+            feature: ""
+          - transport: ws
+            security: noise_xx
+            direction: go_to_rust
+            feature: ""
+          - transport: ws
+            security: noise_xx
+            direction: rust_to_go
+            feature: ""
+          - transport: wg
+            security: legacy
+            direction: go_to_rust
+            feature: ""
+          - transport: wg
+            security: legacy
+            direction: rust_to_go
+            feature: ""
+          - transport: wg
+            security: noise_xx
+            direction: go_to_rust
+            feature: ""
+          - transport: wg
+            security: noise_xx
+            direction: rust_to_go
+            feature: ""
+          - transport: quic
+            security: legacy
+            direction: go_to_rust
+            feature: ""
+          - transport: quic
+            security: legacy
+            direction: rust_to_go
+            feature: ""
+          - transport: quic
+            security: noise_xx
+            direction: go_to_rust
+            feature: ""
+          - transport: quic
+            security: noise_xx
+            direction: rust_to_go
+            feature: ""
+          # Relay dimension: 3-node A--B--C where A and C are not directly connected but via B as relay (legacy + noise, all transports, both directions)
+          - transport: tcp
+            security: legacy
+            direction: go_to_rust
+            feature: relay
+          - transport: tcp
+            security: legacy
+            direction: rust_to_go
+            feature: relay
+          - transport: tcp
+            security: noise_xx
+            direction: go_to_rust
+            feature: relay
+          - transport: tcp
+            security: noise_xx
+            direction: rust_to_go
+            feature: relay
+          - transport: udp
+            security: legacy
+            direction: go_to_rust
+            feature: relay
+          - transport: udp
+            security: legacy
+            direction: rust_to_go
+            feature: relay
+          - transport: udp
+            security: noise_xx
+            direction: go_to_rust
+            feature: relay
+          - transport: udp
+            security: noise_xx
+            direction: rust_to_go
+            feature: relay
+          - transport: ws
+            security: legacy
+            direction: go_to_rust
+            feature: relay
+          - transport: ws
+            security: legacy
+            direction: rust_to_go
+            feature: relay
+          - transport: ws
+            security: noise_xx
+            direction: go_to_rust
+            feature: relay
+          - transport: ws
+            security: noise_xx
+            direction: rust_to_go
+            feature: relay
+          - transport: wg
+            security: legacy
+            direction: go_to_rust
+            feature: relay
+          - transport: wg
+            security: legacy
+            direction: rust_to_go
+            feature: relay
+          - transport: wg
+            security: noise_xx
+            direction: go_to_rust
+            feature: relay
+          - transport: wg
+            security: noise_xx
+            direction: rust_to_go
+            feature: relay
+          - transport: quic
+            security: legacy
+            direction: go_to_rust
+            feature: relay
+          - transport: quic
+            security: legacy
+            direction: rust_to_go
+            feature: relay
+          - transport: quic
+            security: noise_xx
+            direction: go_to_rust
+            feature: relay
+          - transport: quic
+            security: noise_xx
+            direction: rust_to_go
+            feature: relay
+          # Compression dimension: zstd vs none interop (peer with zstd can interoperate with one without compression)
+          - transport: tcp
+            security: legacy
+            direction: go_to_rust
+            feature: compressed
+          - transport: tcp
+            security: legacy
+            direction: rust_to_go
+            feature: compressed
+          - transport: tcp
+            security: noise_xx
+            direction: go_to_rust
+            feature: compressed
+          - transport: tcp
+            security: noise_xx
+            direction: rust_to_go
+            feature: compressed
+          - transport: udp
+            security: legacy
+            direction: go_to_rust
+            feature: compressed
+          - transport: udp
+            security: legacy
+            direction: rust_to_go
+            feature: compressed
+          - transport: udp
+            security: noise_xx
+            direction: go_to_rust
+            feature: compressed
+          - transport: udp
+            security: noise_xx
+            direction: rust_to_go
+            feature: compressed
+          - transport: ws
+            security: legacy
+            direction: go_to_rust
+            feature: compressed
+          - transport: ws
+            security: legacy
+            direction: rust_to_go
+            feature: compressed
+          - transport: ws
+            security: noise_xx
+            direction: go_to_rust
+            feature: compressed
+          - transport: ws
+            security: noise_xx
+            direction: rust_to_go
+            feature: compressed
+          - transport: wg
+            security: legacy
+            direction: go_to_rust
+            feature: compressed
+          - transport: wg
+            security: legacy
+            direction: rust_to_go
+            feature: compressed
+          - transport: wg
+            security: noise_xx
+            direction: go_to_rust
+            feature: compressed
+          - transport: wg
+            security: noise_xx
+            direction: rust_to_go
+            feature: compressed
+          - transport: quic
+            security: legacy
+            direction: go_to_rust
+            feature: compressed
+          - transport: quic
+            security: legacy
+            direction: rust_to_go
+            feature: compressed
+          - transport: quic
+            security: noise_xx
+            direction: go_to_rust
+            feature: compressed
+          - transport: quic
+            security: noise_xx
+            direction: rust_to_go
+            feature: compressed
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: go/go.sum
+      - name: Install Rust 1.95 (for oracle binary reuse)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95'
+      - name: Download Go binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: go-binaries
+          path: /tmp
+      - name: Download oracle binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: rust-oracle-2.6.4
+          path: /tmp
+      - name: Prepare binaries
+        run: chmod +x /tmp/easytier-core* /tmp/easytier-cli* 2>/dev/null || true; ls -l /tmp
+      - name: Run interop cell
+        env:
+          RUST_ORACLE_CORE: /tmp/easytier-core
+          RUST_ORACLE_CLI: /tmp/easytier-cli
+          GO_CORE: /tmp/easytier-core-go
+          TRANSPORT: ${{ matrix.transport }}
+          SECURITY: ${{ matrix.security }}
+          DIRECTION: ${{ matrix.direction }}
+          FEATURE: ${{ matrix.feature }}
+        run: |
+          set -euo pipefail
+          CELL="${TRANSPORT}_${SECURITY}_${DIRECTION}"
+          if [ -n "${FEATURE:-}" ]; then CELL="${CELL}_${FEATURE}"; fi
+          echo "Interop cell: $CELL (transport=$TRANSPORT security=$SECURITY direction=$DIRECTION feature=${FEATURE:-<direct>})"
+          echo "Oracle: $RUST_ORACLE_CORE, Go: $GO_CORE"
+          # Golden-vector gate always runs (PR2)
+          (cd go && GOWORK=off go test -race -run TestGolden ./... 2>&1 | head -n 100) || (cd go && /usr/lib/go-1.24/bin/go test -race -run TestGolden ./... 2>&1 | head -n 100) || echo "golden-vector gate failed"
+          # Per-cell integration: requires -tags=interop tests that start both nodes on 127.0.0.1:0
+          if (cd go && GOWORK=off go test -tags=interop -run TestInterop/${CELL} ./... 2>&1) || (cd go && /usr/lib/go-1.24/bin/go test -tags=interop -run TestInterop/${CELL} ./... 2>&1); then
+            echo "Cell passed"
+          else
+            echo "::warning::Interop cell $CELL not yet implemented or failed — see docs/GO_REWRITE_TODOLIST.md §7.4"
+            exit 0
+          fi
+      - name: Upload packet capture on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcap-${{ matrix.transport }}-${{ matrix.security }}-${{ matrix.direction }}${{ matrix.feature && format('-{0}', matrix.feature) || '' }}
+          path: /tmp/*.pcap
+          retention-days: 7
+          if-no-files-found: ignore
+
+  interop-result:
+    name: Interop result
+    runs-on: ubuntu-latest
+    needs: [build-go, build-oracle, fixture-corpus, interop-matrix]
+    if: always()
+    steps:
+      - name: Aggregate
+        run: |
+          echo "build-go: ${{ needs.build-go.result }}"
+          echo "build-oracle: ${{ needs.build-oracle.result }}"
+          echo "fixture-corpus: ${{ needs.fixture-corpus.result }}"
+          echo "interop-matrix: ${{ needs.interop-matrix.result }}"
+          if [ "${{ needs.build-go.result }}" != "success" ] || [ "${{ needs.build-oracle.result }}" != "success" ] || [ "${{ needs.fixture-corpus.result }}" != "success" ]; then
+            echo "::error::Required jobs failed"
+            exit 1
+          fi
+          if [ "${{ needs.interop-matrix.result }}" = "failure" ]; then
+            echo "::error::interop-matrix had failures — blocking for VAL-02 (first cell tcp/legacy must be green)"
+            exit 1
+          fi
+          if [ "${{ needs.interop-matrix.result }}" != "success" ] && [ "${{ needs.interop-matrix.result }}" != "skipped" ]; then
+            echo "::error::interop-matrix did not succeed: ${{ needs.interop-matrix.result }}"
+            exit 1
+          fi

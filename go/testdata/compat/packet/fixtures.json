@@ -1,0 +1,68 @@
+[
+  {
+    "name": "data-small",
+    "from_peer_id": 287454020,
+    "to_peer_id": 1432778632,
+    "packet_type": 1,
+    "flags": 1,
+    "forward_counter": 1,
+    "payload_hex": "68656c6c6f",
+    "body_hex": "4433221188776655010101000500000068656c6c6f",
+    "payload_length": 5
+  },
+  {
+    "name": "data-empty",
+    "from_peer_id": 1,
+    "to_peer_id": 2,
+    "packet_type": 1,
+    "flags": 0,
+    "forward_counter": 0,
+    "payload_hex": "",
+    "body_hex": "01000000020000000100000000000000",
+    "payload_length": 0
+  },
+  {
+    "name": "handshake",
+    "from_peer_id": 100,
+    "to_peer_id": 0,
+    "packet_type": 2,
+    "flags": 0,
+    "forward_counter": 1,
+    "payload_hex": "0801",
+    "body_hex": "640000000000000002000100020000000801",
+    "payload_length": 2
+  },
+  {
+    "name": "ping",
+    "from_peer_id": 16909060,
+    "to_peer_id": 84281096,
+    "packet_type": 4,
+    "flags": 0,
+    "forward_counter": 7,
+    "payload_hex": "70696e67",
+    "body_hex": "0403020108070605040007000400000070696e67",
+    "payload_length": 4
+  },
+  {
+    "name": "compressed",
+    "from_peer_id": 287454020,
+    "to_peer_id": 1432778632,
+    "packet_type": 1,
+    "flags": 16,
+    "forward_counter": 2,
+    "payload_hex": "aabb01",
+    "body_hex": "44332211887766550110020003000000aabb01",
+    "payload_length": 3
+  },
+  {
+    "name": "max-forward",
+    "from_peer_id": 1,
+    "to_peer_id": 2,
+    "packet_type": 1,
+    "flags": 0,
+    "forward_counter": 7,
+    "payload_hex": "78",
+    "body_hex": "0100000002000000010007000100000078",
+    "payload_length": 1
+  }
+]

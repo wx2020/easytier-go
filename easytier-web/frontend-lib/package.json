@@ -5,8 +5,10 @@
   "type": "module",
   "main": "./dist/easytier-frontend-lib.umd.cjs",
   "module": "./dist/easytier-frontend-lib.js",
+  "types": "./dist/easytier-frontend-lib.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/easytier-frontend-lib.d.ts",
       "import": "./dist/easytier-frontend-lib.js",
       "require": "./dist/easytier-frontend-lib.umd.cjs"
     },

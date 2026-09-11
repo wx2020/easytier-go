@@ -1,0 +1,43 @@
+# REUSE configuration for EasyTier Go rewrite
+# https://reuse.software/spec/
+version = 1
+SPDX-PackageName = "EasyTier Go"
+SPDX-PackageSupplier = "EasyTier Contributors"
+SPDX-PackageDownloadLocation = "https://github.com/EasyTier/EasyTier"
+SPDX-PackageLicenseDeclared = "LGPL-3.0-only"
+
+[[annotations]]
+path = "LICENSES/LGPL-3.0-only.txt"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2007 Free Software Foundation, Inc."
+SPDX-License-Identifier = "LGPL-3.0-only"
+
+[[annotations]]
+path = "go/testdata/**"
+precedence = "override"
+SPDX-FileCopyrightText = "2025 EasyTier Contributors"
+SPDX-License-Identifier = "LGPL-3.0-only"
+
+[[annotations]]
+path = "go/internal/proto/**/*.pb.go"
+precedence = "override"
+SPDX-FileCopyrightText = "2025 EasyTier Contributors"
+SPDX-License-Identifier = "LGPL-3.0-only"
+
+[[annotations]]
+path = "**/*.pb.go"
+precedence = "override"
+SPDX-FileCopyrightText = "2025 EasyTier Contributors"
+SPDX-License-Identifier = "LGPL-3.0-only"
+
+[[annotations]]
+path = "Cargo.lock"
+precedence = "override"
+SPDX-FileCopyrightText = "2025 EasyTier Contributors"
+SPDX-License-Identifier = "LGPL-3.0-only"
+
+[[annotations]]
+path = "go/go.sum"
+precedence = "override"
+SPDX-FileCopyrightText = "2025 EasyTier Contributors"
+SPDX-License-Identifier = "LGPL-3.0-only"

@@ -1,0 +1,154 @@
+[
+  {
+    "name": "line-3",
+    "local_peer_id": 1,
+    "links": [
+      {
+        "A": 1,
+        "B": 2,
+        "Cost": 10
+      },
+      {
+        "A": 2,
+        "B": 3,
+        "Cost": 10
+      }
+    ],
+    "expected_routes": [
+      {
+        "Destination": 2,
+        "NextHop": 2,
+        "Cost": 10
+      },
+      {
+        "Destination": 3,
+        "NextHop": 2,
+        "Cost": 20
+      }
+    ]
+  },
+  {
+    "name": "triangle",
+    "local_peer_id": 1,
+    "links": [
+      {
+        "A": 1,
+        "B": 2,
+        "Cost": 5
+      },
+      {
+        "A": 2,
+        "B": 3,
+        "Cost": 5
+      },
+      {
+        "A": 1,
+        "B": 3,
+        "Cost": 15
+      }
+    ],
+    "expected_routes": [
+      {
+        "Destination": 2,
+        "NextHop": 2,
+        "Cost": 5
+      },
+      {
+        "Destination": 3,
+        "NextHop": 2,
+        "Cost": 10
+      }
+    ]
+  },
+  {
+    "name": "equal-cost",
+    "local_peer_id": 1,
+    "links": [
+      {
+        "A": 1,
+        "B": 2,
+        "Cost": 10
+      },
+      {
+        "A": 1,
+        "B": 3,
+        "Cost": 10
+      },
+      {
+        "A": 2,
+        "B": 4,
+        "Cost": 10
+      },
+      {
+        "A": 3,
+        "B": 4,
+        "Cost": 10
+      }
+    ],
+    "expected_routes": [
+      {
+        "Destination": 2,
+        "NextHop": 2,
+        "Cost": 10
+      },
+      {
+        "Destination": 3,
+        "NextHop": 3,
+        "Cost": 10
+      },
+      {
+        "Destination": 4,
+        "NextHop": 2,
+        "Cost": 20
+      }
+    ]
+  },
+  {
+    "name": "star-5",
+    "local_peer_id": 1,
+    "links": [
+      {
+        "A": 1,
+        "B": 2,
+        "Cost": 1
+      },
+      {
+        "A": 1,
+        "B": 3,
+        "Cost": 1
+      },
+      {
+        "A": 1,
+        "B": 4,
+        "Cost": 1
+      },
+      {
+        "A": 1,
+        "B": 5,
+        "Cost": 1
+      }
+    ],
+    "expected_routes": [
+      {
+        "Destination": 2,
+        "NextHop": 2,
+        "Cost": 1
+      },
+      {
+        "Destination": 3,
+        "NextHop": 3,
+        "Cost": 1
+      },
+      {
+        "Destination": 4,
+        "NextHop": 4,
+        "Cost": 1
+      },
+      {
+        "Destination": 5,
+        "NextHop": 5,
+        "Cost": 1
+      }
+    ]
+  }
+]

@@ -1,0 +1,9 @@
+[package]
+name = "wg-probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+boringtun = { package = "boringtun-easytier", version = "0.6.1" }
+
+[workspace]

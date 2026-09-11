@@ -1,0 +1,47 @@
+[
+  {
+    "name": "handshake-1",
+    "magic": 3521226209,
+    "my_peer_id": 270544960,
+    "version": 1,
+    "features": [
+      "tcp",
+      "quic"
+    ],
+    "network_name": "mesh",
+    "network_secret_digest_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "wire_hex": "08e1cb868f0d10c0e0808101180122037463702204717569632a046d6573683220000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+  },
+  {
+    "name": "handshake-empty-features",
+    "magic": 3521226209,
+    "my_peer_id": 12345,
+    "version": 1,
+    "features": [],
+    "network_name": "testnet",
+    "network_secret_digest_hex": "",
+    "wire_hex": "08e1cb868f0d10b96018012a07746573746e6574"
+  },
+  {
+    "name": "handshake-minimal",
+    "magic": 3521226209,
+    "my_peer_id": 1,
+    "version": 1,
+    "features": [],
+    "network_name": "",
+    "network_secret_digest_hex": "",
+    "wire_hex": "08e1cb868f0d10011801"
+  },
+  {
+    "name": "handshake-with-digest",
+    "magic": 3521226209,
+    "my_peer_id": 999,
+    "version": 1,
+    "features": [
+      "tcp"
+    ],
+    "network_name": "prod",
+    "network_secret_digest_hex": "84670d9456b063e7831e854d5cd7fda7e29f5572287e52a9598f37271de8ad4a",
+    "wire_hex": "08e1cb868f0d10e707180122037463702a0470726f64322084670d9456b063e7831e854d5cd7fda7e29f5572287e52a9598f37271de8ad4a"
+  }
+]

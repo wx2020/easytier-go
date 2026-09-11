@@ -1,0 +1,88 @@
+name: Go
+
+on:
+  push:
+    paths:
+      - 'go/**'
+      - 'go.work'
+      - 'docs/**'
+      - '.github/workflows/go.yml'
+  pull_request:
+    paths:
+      - 'go/**'
+      - 'go.work'
+      - 'docs/**'
+      - '.github/workflows/go.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: go/go.sum
+      - name: Check formatting
+        working-directory: .
+        run: |
+          gofmt -d $(git ls-files '*.go') > /tmp/gofmt.diff
+          if [ -s /tmp/gofmt.diff ]; then
+            cat /tmp/gofmt.diff
+            exit 1
+          fi
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build native binaries
+        run: go build ./cmd/easytier-core ./cmd/easytier-cli
+
+  cross-build:
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            extension: ''
+          - goos: linux
+            goarch: arm64
+            extension: ''
+          - goos: windows
+            goarch: amd64
+            extension: '.exe'
+          - goos: darwin
+            goarch: amd64
+            extension: ''
+          - goos: darwin
+            goarch: arm64
+            extension: ''
+    defaults:
+      run:
+        working-directory: go
+    env:
+      CGO_ENABLED: 0
+      GOWORK: off
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: go/go.sum
+      - name: Build easytier-core
+        run: go build -o "easytier-core${{ matrix.extension }}" ./cmd/easytier-core
+      - name: Build easytier-cli
+        run: go build -o "easytier-cli${{ matrix.extension }}" ./cmd/easytier-cli

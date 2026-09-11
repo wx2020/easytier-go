@@ -1,0 +1,18 @@
+[
+  {
+    "name": "desc-1",
+    "domain_name": "d",
+    "proto_name": "p",
+    "service_name": "s",
+    "method_index": 7,
+    "wire_hex": "0a01641201701a01732007"
+  },
+  {
+    "name": "desc-easytier",
+    "domain_name": "easytier",
+    "proto_name": "common",
+    "service_name": "TestService",
+    "method_index": 1,
+    "wire_hex": "0a0865617379746965721206636f6d6d6f6e1a0b54657374536572766963652001"
+  }
+]

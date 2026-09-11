@@ -43,3 +43,7 @@ easytier-gui/src-tauri/*.sys
 
 .direnv
 .flake-profile
+
+# Go build outputs (do not push binaries)
+/easytier-core
+/go/ffi/ffi

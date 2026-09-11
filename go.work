@@ -1,0 +1,13 @@
+go 1.25.0
+
+use ./go
+
+use ./go/ffi
+
+use ./go/jni
+
+use ./go/platform
+
+use ./go/uptime
+
+use ./go/web

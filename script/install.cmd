@@ -431,9 +431,26 @@ function Get-EasyTier {
         return
     }
 
-    $asset = $response.assets | Where-Object { $_.name -like "easytier-$Arch*.zip" } | Select-Object -First 1
+    # REL-01: prefer Go artifact (easytier-go-v...), fallback to Rust
+    $goArchMap = @{ "windows-x86_64"="windows-amd64"; "windows-arm64"="windows-arm64"; "windows-i686"="windows-386" }
+    $goSuffix = $goArchMap[$Arch]
+    if (-not $goSuffix) { $goSuffix = $Arch -replace "windows-","windows-" }
+    # Try Go first
+    $goName = "easytier-go-v$latestVersion-$goSuffix.zip" -replace "vv","v"
+    # Actually latestVersion already has v? Get-RemoteVersion strips v? Let's handle both
+    $tagWithV = "v$($latestVersion.ToString())" -replace "vv","v"
+    $goCandidate = "easytier-go-$tagWithV-$goSuffix.zip"
+    $asset = $response.assets | Where-Object { $_.name -eq $goCandidate } | Select-Object -First 1
+    if (-not $asset) {
+        # Try without extra v logic: easytier-go-v2.6.4-windows-amd64 pattern
+        $goCandidate2 = "easytier-go-$tagWithV-windows-$($goSuffix -replace 'windows-','').zip" -replace "--","-"
+        $asset = $response.assets | Where-Object { $_.name -like "easytier-go*$goSuffix*.zip" } | Select-Object -First 1
+    }
+    if (-not $asset) {
+        $asset = $response.assets | Where-Object { $_.name -like "easytier-$Arch*.zip" } | Select-Object -First 1
+    }
     if ($asset) {
-        Write-Output "发现新版本 $latestVersion"
+        if ($asset.name -like "easytier-go*") { Write-Output "发现 Go 新版本 $latestVersion ($($asset.name))" } else { Write-Output "发现新版本 $latestVersion (Rust fallback $($asset.name))" }
         $downloadUrl = $asset.browser_download_url
         if ($UseGitHubProxy) {
             $downloadUrl = "$GitHubProxy$downloadUrl"

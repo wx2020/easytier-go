@@ -64,15 +64,17 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
 # reports 'x86' even on a 64-bit machine.
 $cpuArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 switch ($cpuArch) {
-    'AMD64' { $arch = 'x86_64' }
-    'ARM64' { $arch = 'arm64'  }
-    'x86'   { $arch = 'i686'   }
+    'AMD64' { $arch = 'x86_64'; $goarch = 'amd64' }
+    'ARM64' { $arch = 'arm64'; $goarch = 'arm64' }
+    'x86'   { $arch = 'i686'; $goarch = '386' }
     default {
         Write-Error "Unsupported processor architecture: $cpuArch"
         exit 1
     }
 }
 $assetBaseName = "easytier-windows-$arch"
+# Go artifact naming (REL-01): easytier-go-v2.6.4-windows-amd64.zip etc.
+$goAssetBaseName = "easytier-go"
 
 Write-Host ''
 Write-Host '  ===============================================' -ForegroundColor Cyan
@@ -108,23 +110,35 @@ catch {
 }
 
 $releaseVersion = $releaseInfo.tag_name
+# Go version uses v prefix already (e.g., v2.6.4)
+$goAssetZipName = "easytier-go-$releaseVersion-windows-$goarch.zip"
 $assetZipName   = "$assetBaseName-$releaseVersion.zip"
 
 Write-Host "  Version : $releaseVersion" -ForegroundColor Green
+Write-Host "  Go candidate : $goAssetZipName" -ForegroundColor DarkGray
 
 # ---------------------------------------------------------------------------
-# Step 2 - Find download URL
+# Step 2 - Find download URL (prefer Go artifact, fallback to Rust) REL-01
 # ---------------------------------------------------------------------------
 Write-Host ''
 Write-Host '[2/5] Resolving download URL...' -ForegroundColor Yellow
+# Prefer Go artifact (reproducible -trimpath build with checksums/signatures)
 $asset = $releaseInfo.assets |
-    Where-Object { $_.name -eq $assetZipName } |
+    Where-Object { $_.name -eq $goAssetZipName } |
     Select-Object -First 1
-
-if (-not $asset) {
-    $availableAssets = ($releaseInfo.assets | Select-Object -ExpandProperty name) -join ', '
-    Write-Error "Asset '$assetZipName' not found in release $releaseVersion.`nAvailable: $availableAssets`nVisit $GITHUB_RELEASE_URL to download manually."
-    exit 1
+if ($asset) {
+    $assetZipName = $goAssetZipName
+    Write-Host "  Selected Go artifact: $assetZipName" -ForegroundColor Green
+} else {
+    $asset = $releaseInfo.assets |
+        Where-Object { $_.name -eq $assetZipName } |
+        Select-Object -First 1
+    if (-not $asset) {
+        $availableAssets = ($releaseInfo.assets | Select-Object -ExpandProperty name) -join ', '
+        Write-Error "Asset '$goAssetZipName' nor '$assetZipName' not found in release $releaseVersion.`nAvailable: $availableAssets`nVisit $GITHUB_RELEASE_URL to download manually."
+        exit 1
+    }
+    Write-Host "  Selected Rust fallback artifact: $assetZipName" -ForegroundColor Yellow
 }
 
 $downloadUrl = $asset.browser_download_url

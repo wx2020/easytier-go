@@ -1,0 +1,12 @@
+[
+  {
+    "name": "minimal",
+    "toml": "network_name = \"test\"\n",
+    "normalized_toml": "network_name = \"test\"\n"
+  },
+  {
+    "name": "full",
+    "toml": "network_name = \"mesh\"\nnetwork_secret = \"secret\"\nipv4 = \"10.144.144.1\"\nlisteners = [\"tcp://0.0.0.0:11010\", \"udp://0.0.0.0:11010\"]\n",
+    "normalized_toml": "network_name = \"mesh\"\nnetwork_secret = \"secret\"\nipv4 = \"10.144.144.1\"\nlisteners = [\"tcp://0.0.0.0:11010\", \"udp://0.0.0.0:11010\"]\n"
+  }
+]

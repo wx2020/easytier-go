@@ -1,0 +1,35 @@
+[
+  {
+    "name": "rpc-packet-1",
+    "from_peer": 1,
+    "to_peer": 2,
+    "transaction_id": -1,
+    "descriptor": {
+      "name": "desc-1",
+      "domain_name": "d",
+      "proto_name": "p",
+      "service_name": "s",
+      "method_index": 7,
+      "wire_hex": "0a01641201701a01732007"
+    },
+    "body_hex": "aabb",
+    "is_request": true,
+    "total_pieces": 2,
+    "piece_idx": 1,
+    "trace_id": -2,
+    "wire_hex": "0801100218ffffffffffffffffff01220b0a01641201701a017320072a02aabb30013802400148feffffffffffffffff01"
+  },
+  {
+    "name": "rpc-packet-minimal",
+    "from_peer": 123,
+    "to_peer": 0,
+    "transaction_id": 0,
+    "descriptor": null,
+    "body_hex": "68656c6c6f",
+    "is_request": true,
+    "total_pieces": 0,
+    "piece_idx": 0,
+    "trace_id": 0,
+    "wire_hex": "087b2a0568656c6c6f3001"
+  }
+]

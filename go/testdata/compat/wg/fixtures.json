@@ -1,0 +1,30 @@
+[
+  {
+    "name": "wg-empty",
+    "payload_len": 0,
+    "peer_header_len": 16,
+    "header_hex": "4500002400000000400000000000000000000000",
+    "total_len": 36
+  },
+  {
+    "name": "wg-small",
+    "payload_len": 5,
+    "peer_header_len": 16,
+    "header_hex": "4500002900000000400000000000000000000000",
+    "total_len": 41
+  },
+  {
+    "name": "wg-100",
+    "payload_len": 100,
+    "peer_header_len": 16,
+    "header_hex": "4500008800000000400000000000000000000000",
+    "total_len": 136
+  },
+  {
+    "name": "wg-mtu",
+    "payload_len": 1380,
+    "peer_header_len": 16,
+    "header_hex": "4500058800000000400000000000000000000000",
+    "total_len": 1416
+  }
+]

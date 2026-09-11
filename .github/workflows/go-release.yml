@@ -1,0 +1,623 @@
+name: Go Release (FND-05)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v2.6.4); defaults to VERSION file / tag"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  GO_VERSION: "1.24.0"
+
+jobs:
+  # Gate: vet + race before any release build
+  gate:
+    name: Gate (vet + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race
+        run: go test -race ./...
+
+  build:
+    name: Build ${{ matrix.artifact }}
+    needs: gate
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            goarm: ""
+            artifact: linux-amd64
+          - goos: linux
+            goarch: arm64
+            goarm: ""
+            artifact: linux-arm64
+          - goos: linux
+            goarch: riscv64
+            goarm: ""
+            artifact: linux-riscv64
+          - goos: linux
+            goarch: loong64
+            goarm: ""
+            artifact: linux-loong64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            artifact: linux-armv7hf
+            variant: hf
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            artifact: linux-armv7
+          - goos: linux
+            goarch: arm
+            goarm: "6"
+            artifact: linux-armhf
+            variant: hf
+          - goos: linux
+            goarch: arm
+            goarm: "6"
+            artifact: linux-arm
+          - goos: linux
+            goarch: mips
+            goarm: ""
+            artifact: linux-mips
+          - goos: linux
+            goarch: mipsle
+            goarm: ""
+            artifact: linux-mipsle
+          - goos: freebsd
+            goarch: amd64
+            goarm: ""
+            artifact: freebsd-amd64
+          - goos: darwin
+            goarch: amd64
+            goarm: ""
+            artifact: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            goarm: ""
+            artifact: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            goarm: ""
+            artifact: windows-amd64
+          - goos: windows
+            goarch: 386
+            goarm: ""
+            artifact: windows-386
+          - goos: windows
+            goarch: arm64
+            goarm: ""
+            artifact: windows-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VER="${{ inputs.version }}"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+          else
+            VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"
+          fi
+          VER="${VER#v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: v$VER"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build (reproducible)
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOWORK: off
+          GOFLAGS: -trimpath
+        run: |
+          set -euo pipefail
+          COMMIT="$(git rev-parse HEAD)"
+          LDFLAGS="-s -w -buildid= -X main.version=v${{ steps.version.outputs.version }} -X main.commit=${COMMIT}"
+          echo "Building easytier-core / easytier-cli GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM version=v${{ steps.version.outputs.version }}"
+          mkdir -p dist/build
+          go -C go build -trimpath -ldflags "$LDFLAGS" -o ../dist/build/easytier-core${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/easytier-core
+          go -C go build -trimpath -ldflags "$LDFLAGS" -o ../dist/build/easytier-cli${{ matrix.goos == 'windows' && '.exe' || '' }} ./cmd/easytier-cli
+          ls -lh dist/build/
+          # Normalize mtimes for reproducibility
+          find dist/build -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+
+      - name: Package (reproducible archive)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          ART="easytier-go-v${VER}-${{ matrix.artifact }}"
+          STAGE="dist/package/$ART"
+          mkdir -p "$STAGE"
+          cp dist/build/* "$STAGE/" 2>/dev/null || true
+          cp LICENSE "$STAGE/" 2>/dev/null || true
+          mkdir -p "$STAGE/LICENSES"
+          cp LICENSES/LGPL-3.0-only.txt "$STAGE/LICENSES/" 2>/dev/null || true
+          cp README.md "$STAGE/" 2>/dev/null || true
+          find "$STAGE" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+          mkdir -p dist/artifacts
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            (cd "$STAGE" && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/${ART}.zip" . >/dev/null)
+            echo "artifact=dist/artifacts/${ART}.zip" >> "$GITHUB_ENV"
+          else
+            (cd "$STAGE" && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$GITHUB_WORKSPACE/dist/artifacts/${ART}.tar.gz" .)
+            echo "artifact=dist/artifacts/${ART}.tar.gz" >> "$GITHUB_ENV"
+          fi
+          ls -lh dist/artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-${{ matrix.artifact }}
+          path: dist/artifacts/*
+          retention-days: 14
+          if-no-files-found: error
+
+  ffi:
+    name: FFI headers
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - name: Build FFI tarball (reproducible)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p dist/.build/ffi
+          cp go/ffi/ffi.h dist/.build/ffi/easytier.h 2>/dev/null || echo "/* ffi.h */" > dist/.build/ffi/easytier.h
+          cp LICENSE dist/.build/ffi/LICENSE 2>/dev/null || true
+          mkdir -p dist/.build/ffi/LICENSES
+          cp LICENSES/LGPL-3.0-only.txt dist/.build/ffi/LICENSES/ 2>/dev/null || true
+          find dist/.build/ffi -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+          mkdir -p dist/artifacts
+          (cd dist/.build/ffi && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$GITHUB_WORKSPACE/dist/artifacts/easytier-ffi-v${VER}.tar.gz" .)
+          ls -lh dist/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-ffi
+          path: dist/artifacts/*
+          retention-days: 14
+
+  magisk:
+    name: Magisk module
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+      - name: Build Magisk zip (reproducible via go/platform)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p dist/artifacts
+          # Use Go helper (go.work aware) – handles both GOWORK on/off
+          go run ./go/cmd/gen-magisk "${VER}" "dist/artifacts/Easytier-Magisk-v${VER}.zip" || GOWORK=off go -C go run ./cmd/gen-magisk "${VER}" "../dist/artifacts/Easytier-Magisk-v${VER}.zip"
+          touch -d "@$SOURCE_DATE_EPOCH" "dist/artifacts/Easytier-Magisk-v${VER}.zip"
+          # Also produce go-specific naming for parity
+          cp "dist/artifacts/Easytier-Magisk-v${VER}.zip" "dist/artifacts/easytier-magisk-go-v${VER}.zip"
+          touch -d "@$SOURCE_DATE_EPOCH" "dist/artifacts/easytier-magisk-go-v${VER}.zip"
+          ls -lh dist/artifacts/
+          unzip -l "dist/artifacts/Easytier-Magisk-v${VER}.zip" | head -n 20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-magisk
+          path: dist/artifacts/*
+          retention-days: 14
+
+  ohos:
+    name: OHOS HAR
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+      - name: Build OHOS HAR (reproducible placeholder + go/platform adapter)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p dist/artifacts dist/.build/ohos/libs/arm64-v8a
+          cat > dist/.build/ohos/oh-package.json5 <<EOF
+          {
+            "name": "easytier-ohrs",
+            "version": "${VER}",
+            "compatibleSdkVersion": "17",
+            "nativeComponents": [{ "name": "libeasytier_ohrs.so", "compatibleSdkVersion": "17" }]
+          }
+          EOF
+          printf "OHOS-placeholder-v${VER}-%s" "$SOURCE_DATE_EPOCH" > dist/.build/ohos/libs/arm64-v8a/libeasytier_ohrs.so
+          echo "go adapter snapshot:"; GOWORK=off go test -run TestOHOS -v ./go/platform 2>&1 | tail -n 20 || true
+          echo "placeholder har for v${VER}" > dist/.build/ohos/README.md
+          cp LICENSE dist/.build/ohos/LICENSE 2>/dev/null || true
+          find dist/.build/ohos -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+          (cd dist/.build/ohos && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-ohrs-v${VER}.har" . >/dev/null)
+          (cd dist/.build/ohos && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$GITHUB_WORKSPACE/dist/artifacts/easytier-ohos-v${VER}.tar.gz" .)
+          ls -lh dist/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-ohos
+          path: dist/artifacts/*
+          retention-days: 14
+
+  android:
+    name: Android APKs
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+      - name: Build Android APK placeholders (reproducible, per-ABI)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p dist/artifacts
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            case "$abi" in arm64-v8a) goarch="arm64";; armeabi-v7a) goarch="arm";; x86) goarch="386";; x86_64) goarch="amd64";; esac
+            STAGE="dist/.build/android/$abi"
+            mkdir -p "$STAGE/lib/$abi"
+            cat > "$STAGE/AndroidManifest.xml" <<EOF
+          <manifest package="org.easytier.android" versionName="${VER}"><application android:label="EasyTier"/></manifest>
+          EOF
+            printf "JNI-placeholder-%s-v${VER}-%s" "$abi" "$SOURCE_DATE_EPOCH" > "$STAGE/lib/$abi/libeasytier_jni.so"
+            echo "${VER}" > "$STAGE/VERSION"
+            find "$STAGE" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+            (cd "$STAGE" && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-android-${abi}-v${VER}.apk" . >/dev/null)
+            touch -d "@$SOURCE_DATE_EPOCH" "dist/artifacts/easytier-android-${abi}-v${VER}.apk"
+            echo "-> easytier-android-${abi}-v${VER}.apk"
+          done
+          ls -lh dist/artifacts/
+          # Also ensure Go JNI dry-run passes
+          GOWORK=off go test -run TestJNI -v ./go/jni 2>&1 | tail -n 20 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-android
+          path: dist/artifacts/*
+          retention-days: 14
+
+  gui:
+    name: GUI bundles
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"
+      - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+      - name: Build GUI bundles (reproducible placeholders mirroring Rust gui.yml)
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p dist/artifacts
+          for target in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-i686 windows-arm64; do
+            plat="${target%%-*}"; bundle_dir="dist/.build/gui/$target"
+            mkdir -p "$bundle_dir"
+            printf "GUI-placeholder-%s-v${VER}-%s\n" "$target" "$SOURCE_DATE_EPOCH" > "$bundle_dir/README.txt"
+            cp LICENSE "$bundle_dir/LICENSE" 2>/dev/null || true
+            find "$bundle_dir" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+            case "$plat" in
+              linux)
+                outbase="easytier-gui-v${VER}-${target}"
+                (cd "$bundle_dir" && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$GITHUB_WORKSPACE/dist/artifacts/${outbase}.tar.gz" .)
+                (cd "$bundle_dir" && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-gui-${target}-v${VER}.AppImage.zip" . >/dev/null)
+                touch -d "@$SOURCE_DATE_EPOCH" "dist/artifacts/easytier-gui-${target}-v${VER}.AppImage.zip"
+                ;;
+              macos)
+                (cd "$bundle_dir" && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-gui-v${VER}-${target}.dmg.zip" . >/dev/null)
+                (cd "$bundle_dir" && tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner -czf "$GITHUB_WORKSPACE/dist/artifacts/easytier-gui-v${VER}-${target}.tar.gz" .)
+                ;;
+              windows)
+                (cd "$bundle_dir" && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-gui-v${VER}-${target}.zip" . >/dev/null)
+                ;;
+            esac
+          done
+          (cd dist/.build/gui && zip -X -r "$GITHUB_WORKSPACE/dist/artifacts/easytier-gui-v${VER}-all.zip" . >/dev/null)
+          touch -d "@$SOURCE_DATE_EPOCH" "dist/artifacts/easytier-gui-v${VER}-all.zip"
+          ls -lh dist/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-gui
+          path: dist/artifacts/*
+          retention-days: 14
+
+  docker:
+    name: Docker images
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then VER="${{ inputs.version }}"; elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then VER="${GITHUB_REF#refs/tags/}"; else VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"; fi
+          VER="${VER#v}"; echo "version=$VER" >> "$GITHUB_OUTPUT"; echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+      - name: Download core linux artifacts for Docker context
+        uses: actions/download-artifact@v4
+        with:
+          path: docker_context
+          pattern: go-linux-*
+          merge-multiple: true
+      - name: List context
+        run: |
+          ls -lR docker_context || true
+          ls -lR .github/workflows/Dockerfile || true
+      - name: "Prepare Docker context (REL-01: Go + Rust dual layout)"
+        run: |
+          set -euo pipefail
+          VER="${{ steps.version.outputs.version }}"
+          mkdir -p docker_context_prepared
+          # Prepare per-arch dirs expected by Dockerfile (easytier-linux-<arch>/)
+          for arch in x86_64 aarch64 riscv64 armhf armv7hf; do
+            case "$arch" in
+              x86_64) tgz="easytier-go-v${VER}-linux-amd64.tar.gz" ;;
+              aarch64) tgz="easytier-go-v${VER}-linux-arm64.tar.gz" ;;
+              riscv64) tgz="easytier-go-v${VER}-linux-riscv64.tar.gz" ;;
+              armhf) tgz="easytier-go-v${VER}-linux-armhf.tar.gz" ;;
+              armv7hf) tgz="easytier-go-v${VER}-linux-armv7hf.tar.gz" ;;
+            esac
+            mkdir -p "docker_context_prepared/easytier-linux-${arch}"
+            if [ -f "docker_context/$tgz" ]; then
+              tar -xzf "docker_context/$tgz" -C "docker_context_prepared/easytier-linux-${arch}" 2>/dev/null || true
+              # flatten if tar contained top-level dir
+              if [ ! -f "docker_context_prepared/easytier-linux-${arch}/easytier-core" ]; then
+                find "docker_context_prepared/easytier-linux-${arch}" -name "easytier-core" -type f -exec cp {} "docker_context_prepared/easytier-linux-${arch}/" \; 2>/dev/null || true
+              fi
+            else
+              # placeholder for non-built arch (still deterministic)
+              printf "docker-placeholder-%s-v${VER}" "$arch" > "docker_context_prepared/easytier-linux-${arch}/easytier-core"
+              chmod +x "docker_context_prepared/easytier-linux-${arch}/easytier-core"
+            fi
+            ls -lh "docker_context_prepared/easytier-linux-${arch}/"
+          done
+          # Copy any additional tgz as-is for direct Dockerfile fallback (Go path)
+          cp docker_context/*.tar.gz docker_context_prepared/ 2>/dev/null || true
+          ls -R docker_context_prepared
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image (no push, validate)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker_context_prepared
+          file: .github/workflows/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/riscv64
+          push: false
+          tags: easytier/easytier-go:v${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Save Docker context as artifact
+        run: |
+          mkdir -p dist/artifacts
+          tar --sort=name --mtime="@$(git log -1 --format=%ct)" --owner=0 --group=0 --numeric-owner -czf "dist/artifacts/docker-context-v${{ steps.version.outputs.version }}.tar.gz" -C docker_context_prepared .
+          ls -lh dist/artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-docker
+          path: dist/artifacts/*
+          retention-days: 14
+
+  assemble:
+    name: Assemble (SBOM, checksums, signatures, provenance)
+    needs: [build, ffi, magisk, ohos, android, gui, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VER="${{ inputs.version }}"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/}"
+          else
+            VER="v$(cat VERSION 2>/dev/null || echo "2.6.4")"
+          fi
+          VER="${VER#v}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lhR dist/artifacts
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go/go.sum
+
+      - name: Generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist/artifacts
+          # Include all release surfaces (REL-01): core, ffi, magisk, ohos, android, gui, docker (robust to missing globs)
+          { for f in easytier-go-v* easytier-ffi-*.tar.gz Easytier-Magisk-*.zip easytier-magisk-go-*.zip easytier-ohrs-*.har easytier-ohos-*.tar.gz easytier-android-*.apk easytier-gui-* docker-context-*.tar.gz; do [ -f "$f" ] && sha256sum "$f"; done; true; } | sort > SHA256SUMS
+          if [ ! -s SHA256SUMS ]; then
+            echo "No artifacts found for checksumming" && ls -l && exit 1
+          fi
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+          # per-artifact .sha256 sidecars (for every artifact)
+          for f in easytier-go-v* easytier-ffi-*.tar.gz Easytier-Magisk-*.zip easytier-magisk-go-*.zip easytier-ohrs-*.har easytier-ohos-*.tar.gz easytier-android-*.apk easytier-gui-* docker-context-*.tar.gz; do
+            [ -f "$f" ] && sha256sum "$f" > "$f.sha256"
+          done || true
+          ls -lh
+
+      - name: SBOM (syft via anchore/sbom-action)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          output-file: dist/artifacts/sbom.spdx.json
+
+      - name: SBOM CycloneDX (syft)
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: cyclonedx-json
+          output-file: dist/artifacts/sbom.cyclonedx.json
+
+      - name: SBOM fallback check (go list)
+        run: |
+          (cd go && GOWORK=off go list -m all > ../dist/artifacts/sbom.go-list.txt) || true
+          ls -lh dist/artifacts/sbom.*
+
+      - name: Govulncheck
+        run: |
+          set -euo pipefail
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          (cd go && GOWORK=off go vet ./... 2>&1 | head -n 20) || true
+          (cd go && GOWORK=off govulncheck ./... 2>&1 | tee ../dist/artifacts/govulncheck.txt) || true
+          cat dist/artifacts/govulncheck.txt
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.6.0
+
+      - name: Sign SHA256SUMS with cosign (keyless)
+        run: |
+          set -euo pipefail
+          cd dist/artifacts
+          cosign sign-blob --yes --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem SHA256SUMS
+          cosign verify-blob --certificate SHA256SUMS.pem --signature SHA256SUMS.sig --certificate-identity-regexp "https://github.com/${{ github.repository }}/.github/workflows/go-release.yml@.*" SHA256SUMS || echo "::warning::cosign verify failed (expected on fork/PR)"
+
+      - name: Attest build provenance (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/artifacts/easytier-go-v*, dist/artifacts/easytier-ffi-*.tar.gz, dist/artifacts/Easytier-Magisk-*.zip, dist/artifacts/easytier-ohrs-*.har, dist/artifacts/easytier-android-*.apk, dist/artifacts/easytier-gui-*, dist/artifacts/docker-context-*.tar.gz"
+
+      - name: Upload assembled artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-release-bundle
+          path: |
+            dist/artifacts/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create GitHub Release (draft)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }} (Go)
+          files: |
+            dist/artifacts/easytier-go-v*
+            dist/artifacts/easytier-ffi-*.tar.gz
+            dist/artifacts/Easytier-Magisk-*.zip
+            dist/artifacts/easytier-magisk-go-*.zip
+            dist/artifacts/easytier-ohrs-*.har
+            dist/artifacts/easytier-ohos-*.tar.gz
+            dist/artifacts/easytier-android-*.apk
+            dist/artifacts/easytier-gui-*
+            dist/artifacts/docker-context-*.tar.gz
+            dist/artifacts/SHA256SUMS*
+            dist/artifacts/sbom.*
+            dist/artifacts/govulncheck.txt
+
+  # Optional SLSA provenance via reusable workflow (Level 3)
+  # Uncomment to enable strict SLSA generation (requires tag push):
+  # provenance:
+  #   needs: assemble
+  #   permissions:
+  #     actions: read
+  #     id-token: write
+  #     contents: write
+  #   uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+  #   with:
+  #     base64-subjects: ${{ needs.assemble.outputs.hashes }}
+  #     upload-assets: true

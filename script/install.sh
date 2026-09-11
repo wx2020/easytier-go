@@ -151,7 +151,26 @@ if [[ "$ARCH" == "armv7" || "$ARCH" == "arm" ]]; then
   fi
 fi
 
-echo -e "\r\n${GREEN_COLOR}Your platform: ${ARCH} (${platform}) ${RES}\r\n" 1>&2
+# Go artifact mapping (REL-01: install.sh must handle Go binaries)
+# Maps Rust ARCH to Go release artifact suffix (see docs/RELEASE.md §2.1)
+go_artifact_suffix() {
+  case "$1" in
+    x86_64) echo "linux-amd64" ;;
+    aarch64) echo "linux-arm64" ;;
+    riscv64) echo "linux-riscv64" ;;
+    loongarch64) echo "linux-loong64" ;;
+    armv7hf) echo "linux-armv7hf" ;;
+    armv7) echo "linux-armv7" ;;
+    armhf) echo "linux-armhf" ;;
+    arm) echo "linux-arm" ;;
+    mips) echo "linux-mips" ;;
+    mipsel) echo "linux-mipsle" ;;
+    *) echo "linux-${1}" ;;
+  esac
+}
+GO_ART=$(go_artifact_suffix "$ARCH")
+
+echo -e "\r\n${GREEN_COLOR}Your platform: ${ARCH} (${platform}) -> Go: ${GO_ART} ${RES}\r\n" 1>&2
 
 if [ "$(id -u)" != "0" ]; then
   echo -e "\r\n${RED_COLOR}This script requires run as Root !${RES}\r\n" 1>&2
@@ -207,22 +226,70 @@ INSTALL() {
     exit 1
   fi
 
-  # Download
+  # Download — try Go artifact first (easytier-go-v...-linux-*.tar.gz), fallback to Rust zip (REL-01)
   echo -e "\r\n${GREEN_COLOR}Downloading EasyTier $LATEST_VERSION ...${RES}"
-  rm -rf /tmp/easytier_tmp_install.zip
-  BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-linux-${ARCH}-${LATEST_VERSION}.zip"
-  DOWNLOAD_URL=$($NO_GH_PROXY && echo "$BASE_URL" || echo "${GH_PROXY}${BASE_URL}")
-  echo -e "Download URL: ${GREEN_COLOR}${DOWNLOAD_URL}${RES}"
-  curl -L ${DOWNLOAD_URL} -o /tmp/easytier_tmp_install.zip $CURL_BAR
+  rm -rf /tmp/easytier_tmp_install.zip /tmp/easytier_tmp_install.tar.gz
+  GO_BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-go-${LATEST_VERSION}-${GO_ART}.tar.gz"
+  RUST_BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-linux-${ARCH}-${LATEST_VERSION}.zip"
+  GO_URL=$($NO_GH_PROXY && echo "$GO_BASE_URL" || echo "${GH_PROXY}${GO_BASE_URL}")
+  RUST_URL=$($NO_GH_PROXY && echo "$RUST_BASE_URL" || echo "${GH_PROXY}${RUST_BASE_URL}")
 
-  # Unzip resource
-  echo -e "\r\n${GREEN_COLOR}Unzip resource ...${RES}"
-  unzip -o /tmp/easytier_tmp_install.zip -d $INSTALL_PATH/
-  mkdir $INSTALL_PATH/config
-  mv $INSTALL_PATH/easytier-linux-${ARCH}/* $INSTALL_PATH/
-  rm -rf $INSTALL_PATH/easytier-linux-${ARCH}/
-  chmod +x $INSTALL_PATH/easytier-core $INSTALL_PATH/easytier-cli
-  if [ -f $INSTALL_PATH/easytier-core ] || [ -f $INSTALL_PATH/easytier-cli ]; then
+  DOWNLOAD_OK=false
+  # Try Go tar.gz (preferred, reproducible -trimpath build)
+  echo -e "Trying Go artifact: ${GREEN_COLOR}${GO_URL}${RES}"
+  if curl -L -f ${GO_URL} -o /tmp/easytier_tmp_install.tar.gz $CURL_BAR 2>/dev/null; then
+    echo -e "${GREEN_COLOR}Go artifact downloaded${RES}"
+    DOWNLOAD_OK=true
+    INSTALL_ARCHIVE="/tmp/easytier_tmp_install.tar.gz"
+    INSTALL_ARCHIVE_TYPE="tar.gz"
+  else
+    echo -e "Go artifact not found, falling back to Rust: ${GREEN_COLOR}${RUST_URL}${RES}"
+    echo -e "Download URL: ${GREEN_COLOR}${RUST_URL}${RES}"
+    curl -L ${RUST_URL} -o /tmp/easytier_tmp_install.zip $CURL_BAR
+    INSTALL_ARCHIVE="/tmp/easytier_tmp_install.zip"
+    INSTALL_ARCHIVE_TYPE="zip"
+    # Verify Rust download succeeded
+    if [ ! -s "$INSTALL_ARCHIVE" ]; then
+      echo -e "${RED_COLOR}Download failed (both Go and Rust artifacts missing)${RES}"
+      exit 1
+    fi
+    DOWNLOAD_OK=true
+  fi
+
+  # Extract resource (handle both layouts)
+  echo -e "\r\n${GREEN_COLOR}Extracting resource ...${RES}"
+  mkdir -p "$INSTALL_PATH/config" 2>/dev/null || mkdir -p "$INSTALL_PATH"
+  if [ "$INSTALL_ARCHIVE_TYPE" = "tar.gz" ]; then
+    # Go artifact is flat (contains easytier-core/cli at top-level)
+    tar -xzf "$INSTALL_ARCHIVE" -C "$INSTALL_PATH/" 2>/dev/null || tar -xzf "$INSTALL_ARCHIVE" -C "$INSTALL_PATH/"
+    # If still nested (fallback), handle Rust-style subdirectory
+    if [ -d "$INSTALL_PATH/easytier-linux-${ARCH}" ]; then
+      mv "$INSTALL_PATH/easytier-linux-${ARCH}"/* "$INSTALL_PATH/" 2>/dev/null || true
+      rm -rf "$INSTALL_PATH/easytier-linux-${ARCH}/"
+    fi
+    # Handle Go artifact inner directory if any (e.g., easytier-go-.../ )
+    for d in "$INSTALL_PATH"/easytier-go-*; do
+      if [ -d "$d" ]; then
+        mv "$d"/* "$INSTALL_PATH/" 2>/dev/null || true
+        rm -rf "$d"
+      fi
+    done
+  else
+    unzip -o "$INSTALL_ARCHIVE" -d "$INSTALL_PATH/"
+    # Rust layout: easytier-linux-ARCH/ ; Go zip (windows) is flat
+    if [ -d "$INSTALL_PATH/easytier-linux-${ARCH}" ]; then
+      mv "$INSTALL_PATH/easytier-linux-${ARCH}"/* "$INSTALL_PATH/"
+      rm -rf "$INSTALL_PATH/easytier-linux-${ARCH}/"
+    fi
+    for d in "$INSTALL_PATH"/easytier-go-*; do
+      if [ -d "$d" ]; then
+        mv "$d"/* "$INSTALL_PATH/" 2>/dev/null || true
+        rm -rf "$d"
+      fi
+    done
+  fi
+  chmod +x "$INSTALL_PATH/easytier-core" "$INSTALL_PATH/easytier-cli" 2>/dev/null || true
+  if [ -f "$INSTALL_PATH/easytier-core" ] || [ -f "$INSTALL_PATH/easytier-cli" ]; then
     echo -e "${GREEN_COLOR} Download successfully! ${RES}"
   else
     echo -e "${RED_COLOR} Download failed! ${RES}"
@@ -415,20 +482,40 @@ UPDATE() {
   TEMP_UPDATE_DIR=$(mktemp -d /tmp/easytier_update_XXXXXX)
   echo -e "${GREEN_COLOR}Downloading new version to temporary directory: $TEMP_UPDATE_DIR${RES}"
   
-  BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-linux-${ARCH}-${LATEST_VERSION}.zip"
-  DOWNLOAD_URL=$($NO_GH_PROXY && echo "$BASE_URL" || echo "${GH_PROXY}${BASE_URL}")
+  GO_BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-go-${LATEST_VERSION}-${GO_ART}.tar.gz"
+  RUST_BASE_URL="https://github.com/EasyTier/EasyTier/releases/latest/download/easytier-linux-${ARCH}-${LATEST_VERSION}.zip"
+  GO_URL=$($NO_GH_PROXY && echo "$GO_BASE_URL" || echo "${GH_PROXY}${GO_BASE_URL}")
+  RUST_URL=$($NO_GH_PROXY && echo "$RUST_BASE_URL" || echo "${GH_PROXY}${RUST_BASE_URL}")
   
-  echo -e "Download URL: ${GREEN_COLOR}${DOWNLOAD_URL}${RES}"
-  curl -L ${DOWNLOAD_URL} -o "$TEMP_UPDATE_DIR/easytier.zip" $CURL_BAR
-  if [ $? -ne 0 ]; then
-      echo -e "${RED_COLOR}Download failed!${RES}"
+  # Try Go first, fallback to Rust (REL-01)
+  echo -e "Trying Go artifact: ${GREEN_COLOR}${GO_URL}${RES}"
+  if curl -L -f "${GO_URL}" -o "$TEMP_UPDATE_DIR/easytier.tar.gz" $CURL_BAR 2>/dev/null; then
+    echo -e "${GREEN_COLOR}Go artifact downloaded${RES}"
+    tar -xzf "$TEMP_UPDATE_DIR/easytier.tar.gz" -C "$TEMP_UPDATE_DIR/"
+    # Go layout is flat; locate easytier-core wherever it landed
+    NEW_CORE_FILE=$(find "$TEMP_UPDATE_DIR" -name "easytier-core" -type f 2>/dev/null | head -n 1)
+    if [ -z "$NEW_CORE_FILE" ]; then
+      echo -e "${RED_COLOR}Extraction failed or Go archive is invalid.${RES}"
       rm -rf "$TEMP_UPDATE_DIR"
       exit 1
+    fi
+    # Normalize to TEMP_UPDATE_DIR/easytier-linux-ARCH for downstream mv logic
+    mkdir -p "$TEMP_UPDATE_DIR/easytier-linux-${ARCH}"
+    # Move binaries into that dir so later mv works uniformly
+    find "$TEMP_UPDATE_DIR" -maxdepth 2 -name "easytier-core" -o -name "easytier-cli" | while read f; do cp "$f" "$TEMP_UPDATE_DIR/easytier-linux-${ARCH}/" 2>/dev/null || true; done
+    NEW_CORE_FILE="$TEMP_UPDATE_DIR/easytier-linux-${ARCH}/easytier-core"
+  else
+    echo -e "Go artifact not found, falling back to Rust: ${GREEN_COLOR}${RUST_URL}${RES}"
+    echo -e "Download URL: ${GREEN_COLOR}${RUST_URL}${RES}"
+    curl -L "${RUST_URL}" -o "$TEMP_UPDATE_DIR/easytier.zip" $CURL_BAR
+    if [ $? -ne 0 ]; then
+        echo -e "${RED_COLOR}Download failed!${RES}"
+        rm -rf "$TEMP_UPDATE_DIR"
+        exit 1
+    fi
+    unzip -o "$TEMP_UPDATE_DIR/easytier.zip" -d "$TEMP_UPDATE_DIR/"
+    NEW_CORE_FILE="$TEMP_UPDATE_DIR/easytier-linux-${ARCH}/easytier-core"
   fi
-  
-  unzip -o "$TEMP_UPDATE_DIR/easytier.zip" -d "$TEMP_UPDATE_DIR/"
-  
-  NEW_CORE_FILE="$TEMP_UPDATE_DIR/easytier-linux-${ARCH}/easytier-core"
   if [ ! -f "$NEW_CORE_FILE" ]; then
       echo -e "${RED_COLOR}Extraction failed or the downloaded archive is invalid.${RES}"
       rm -rf "$TEMP_UPDATE_DIR"

@@ -1,0 +1,38 @@
+[
+  {
+    "name": "mesh-secret",
+    "str1": "mesh",
+    "str2": "secret",
+    "digest_hex": "31107b8e51f0ce46f7b98ceefacfec089fdf3c65e27f8b20fbe21c0ae043c564"
+  },
+  {
+    "name": "empty-machine-id",
+    "str1": "",
+    "str2": "machine-id",
+    "digest_hex": "68c22d62bc0ab670f44068eff88224c91b2fa9e3cfffb6722b5553c491f454a7"
+  },
+  {
+    "name": "test-empty",
+    "str1": "test",
+    "str2": "",
+    "digest_hex": "e0969da9b8fb378dce342ab96f8be9dc0b5ca8125197369a011a53c6be2ba031"
+  },
+  {
+    "name": "easytier-network",
+    "str1": "easytier",
+    "str2": "default-secret",
+    "digest_hex": "3b6f688db087e3d4af2c1c0bb385688118f5b74032fe77f2d468ad5d0773596a"
+  },
+  {
+    "name": "prod-secret",
+    "str1": "prod",
+    "str2": "secret",
+    "digest_hex": "84670d9456b063e7831e854d5cd7fda7e29f5572287e52a9598f37271de8ad4a"
+  },
+  {
+    "name": "empty-empty",
+    "str1": "",
+    "str2": "",
+    "digest_hex": "d1fba762150c532c4cf426633e76377d6d62dd773d5a8878106c97eb71091f4f"
+  }
+]
