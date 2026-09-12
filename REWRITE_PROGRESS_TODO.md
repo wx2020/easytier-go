@@ -58,6 +58,10 @@
 9. **测试**：密钥推导/XOR 金标准向量（镜像生成）；AEAD 尾部布局、确定性
    nonce、防篡改、回退一致性、Null 语义单元测试；core 包真实 TCP+legacy
    握手+aes-gcm 数据面端到端测试。
+10. **WG 认证顺序缺陷**：加密模式下传输数据报不得创建会话（此前任意
+    remote 的首个数据报会先建会话再认证，错误密钥的会话会短暂出现在
+    Accept 通道——`TestWGEncryptedDropsWrongSecret` 暴露的竞态）。现仅
+    `handleHsInit` 认证成功后建会话；plain 模式（无 cryptoCfg）保持原语义。
 
 ## 3. 逐模块完成度
 

@@ -5,6 +5,7 @@ package peer
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
@@ -141,7 +142,7 @@ func TestAeadLegacyCipherTailLayout(t *testing.T) {
 }
 
 func TestAeadLegacyCipherShortPayload(t *testing.T) {
-	key256, _ := protocol.DeriveLegacyKeys("legacy-secret")
+	_, key256 := protocol.DeriveLegacyKeys("legacy-secret")
 	cipher, err := NewChaCha20LegacyCipher(key256)
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +251,6 @@ func hexDigit(c byte) (byte, error) {
 	case c >= 'A' && c <= 'F':
 		return c - 'A' + 10, nil
 	default:
-		return 0, bytes.ErrInvalid
+		return 0, errors.New("invalid hex digit")
 	}
 }

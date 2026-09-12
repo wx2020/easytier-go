@@ -250,6 +250,17 @@ func (s *WGService) sessionForRemote(remote *net.UDPAddr) (*WGSession, bool) {
 	return session, true
 }
 
+// lookupSession returns the existing session for remote without creating one.
+func (s *WGService) lookupSession(remote *net.UDPAddr) *WGSession {
+	key := remote.String()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	return s.sessions[key]
+}
+
 func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 	if len(data) < protocol.WGTunnelHeaderSize+1 {
 		return
@@ -283,20 +294,37 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 	if len(data) < protocol.WGTunnelHeaderSize+protocol.PeerManagerHeaderSize {
 		return
 	}
-	session, newSession := s.sessionForRemote(remote)
+	if s.cryptoCfg == nil {
+		// Plain mode carries no native authentication; sessions bind on
+		// the first datagram (legacy handshake payload follows).
+		session, newSession := s.sessionForRemote(remote)
+		if session == nil {
+			return
+		}
+		packet, err := session.openDatagram(body)
+		if err != nil {
+			if newSession {
+				// Undecryptable first datagram: drop the session so junk
+				// remotes leave no state.
+				session.shutdown()
+				s.mu.Lock()
+				delete(s.sessions, remote.String())
+				s.mu.Unlock()
+			}
+			return
+		}
+		_ = session.deliver(packet)
+		return
+	}
+	// Crypto-enabled mode must never create sessions from transport data:
+	// only an authenticated handshake (handleHsInit) establishes one, so
+	// unauthenticated remotes leave no state.
+	session := s.lookupSession(remote)
 	if session == nil {
 		return
 	}
 	packet, err := session.openDatagram(body)
 	if err != nil {
-		if newSession {
-			// Undecryptable first datagram: drop the session so junk
-			// remotes (e.g. wrong network secret) leave no state.
-			session.shutdown()
-			s.mu.Lock()
-			delete(s.sessions, remote.String())
-			s.mu.Unlock()
-		}
 		return
 	}
 	// Deliver first.
