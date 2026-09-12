@@ -107,7 +107,7 @@ func bindDeviceControl(dev string) func(network, address string, c syscall.RawCo
 	return func(network, address string, c syscall.RawConn) error {
 		var sockErr error
 		if err := c.Control(func(fd uintptr) {
-			sockErr = applyBindDevice(int(fd), dev, network)
+			sockErr = applyBindDevice(int(fd), dev, network, address)
 		}); err != nil {
 			return err
 		}
@@ -136,12 +136,12 @@ func networkIsIPv6(network, address string) bool {
 // applyBindDevice pins the socket to dev. Each platform file implements
 // the OS-specific socket option; see bindsock.go for the mapping to the
 // Rust oracle's bind().
-func applyBindDevice(fd int, dev, network string) error {
+func applyBindDevice(fd int, dev, network, address string) error {
 	if dev == "" {
 		return nil
 	}
 	if strings.Contains(dev, "\x00") {
 		return fmt.Errorf("bind-to-device %q: device name contains NUL", dev)
 	}
-	return bindDeviceOS(fd, dev, network)
+	return bindDeviceOS(fd, dev, network, address)
 }
