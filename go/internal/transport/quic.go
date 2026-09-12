@@ -325,7 +325,7 @@ func DialQUIC(ctx context.Context, address string) (*QUICSession, error) {
 	if err := writeUDP(ctx, socket, syn, remote); err != nil {
 		return nil, fmt.Errorf("send QUIC SYN: %w", err)
 	}
-	if err := waitForSACK(ctx, socket, remote, connID, magic); err != nil {
+	if err := waitForSACK(ctx, socket, remote, connID, magic, true); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {

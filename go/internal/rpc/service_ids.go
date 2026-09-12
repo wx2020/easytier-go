@@ -37,12 +37,14 @@ const (
 	ServiceIDPeerCenter uint32 = 50
 )
 
-// Canonical service names used in RPC descriptors.
+// Canonical service names used in RPC descriptors. These must match the
+// reference proto service names byte-for-byte, because the reference
+// registry keys services by (domain, service_name, proto_name).
 const (
 	ServiceNameForeignNetwork  = "foreign_network"
 	ServiceNameDirectConnector = "direct_connector"
 	ServiceNameHolePunch       = "hole_punch"
-	ServiceNameOSPFRoute       = "ospf_route"
+	ServiceNameOSPFRoute       = "OspfRouteRpc"
 )
 
 // ServiceBinding binds a numeric ID to its canonical service name.

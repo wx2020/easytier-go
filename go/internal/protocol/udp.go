@@ -6,6 +6,7 @@ package protocol
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 )
 
 const (
@@ -80,4 +81,45 @@ func ParseUDPDatagram(data []byte) (UDPDatagram, error) {
 		},
 		Payload: payload,
 	}, nil
+}
+
+// Hole punch control payload sizes: address bytes plus little-endian port.
+const (
+	V4HolePunchPayloadSize = 4 + 2
+	V6HolePunchPayloadSize = 16 + 2
+)
+
+// EncodeV4HolePunchControl serializes an IPv4 hole punch control payload.
+func EncodeV4HolePunchControl(address [4]byte, port uint16) []byte {
+	payload := make([]byte, V4HolePunchPayloadSize)
+	copy(payload, address[:])
+	binary.LittleEndian.PutUint16(payload[4:], port)
+	return payload
+}
+
+// EncodeV6HolePunchControl serializes an IPv6 hole punch control payload.
+func EncodeV6HolePunchControl(address [16]byte, port uint16) []byte {
+	payload := make([]byte, V6HolePunchPayloadSize)
+	copy(payload, address[:])
+	binary.LittleEndian.PutUint16(payload[16:], port)
+	return payload
+}
+
+// DecodeHolePunchControl decodes a V4/V6 hole punch control payload into a
+// UDP target address.
+func DecodeHolePunchControl(messageType uint8, payload []byte) (*net.UDPAddr, error) {
+	switch messageType {
+	case UDPPacketTypeV4HolePunch:
+		if len(payload) != V4HolePunchPayloadSize {
+			return nil, fmt.Errorf("IPv4 hole punch control payload has length %d, want %d", len(payload), V4HolePunchPayloadSize)
+		}
+		return &net.UDPAddr{IP: net.IP(append([]byte(nil), payload[:4]...)), Port: int(binary.LittleEndian.Uint16(payload[4:]))}, nil
+	case UDPPacketTypeV6HolePunch:
+		if len(payload) != V6HolePunchPayloadSize {
+			return nil, fmt.Errorf("IPv6 hole punch control payload has length %d, want %d", len(payload), V6HolePunchPayloadSize)
+		}
+		return &net.UDPAddr{IP: net.IP(append([]byte(nil), payload[:16]...)), Port: int(binary.LittleEndian.Uint16(payload[16:]))}, nil
+	default:
+		return nil, fmt.Errorf("message type %d is not a hole punch control", messageType)
+	}
 }

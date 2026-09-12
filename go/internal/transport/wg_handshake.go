@@ -376,10 +376,12 @@ func wgSessionKey(staticShared, dh1, dh2 [32]byte, ePub, rPub [32]byte) ([32]byt
 // AdoptSessionKey reseeds the data plane with a handshaked session key,
 // giving forward secrecy over the static identity keys. Epoch numbering
 // continues monotonically and the replay window restarts for the new key.
+// The REJECT_AFTER_TIME expiry window restarts with the new material.
 func (s *WgCryptoState) AdoptSessionKey(key [32]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.master = append([]byte(nil), key[:]...)
+	s.established = time.Now()
 	var next uint32 = 1
 	if s.sendKey != nil {
 		next = s.sendKey.epoch + 1

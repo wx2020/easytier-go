@@ -60,8 +60,27 @@
    握手+aes-gcm 数据面端到端测试。
 10. **WG 认证顺序缺陷**：加密模式下传输数据报不得创建会话（此前任意
     remote 的首个数据报会先建会话再认证，错误密钥的会话会短暂出现在
-    Accept 通道——`TestWGEncryptedDropsWrongSecret` 暴露的竞态）。现仅
-    `handleHsInit` 认证成功后建会话；plain 模式（无 cryptoCfg）保持原语义。
+    Accept 通道——`TestWGEncryptedDropsWrongSecret` 暴露的竞态）。现改为
+    先创建（静态 epoch-0 密钥原生模式无需握手）但**认证成功后才浮出**
+    Accept；plain 模式（无 cryptoCfg）保持原语义。
+11. **OSPF 线协议对齐（P1 项）**：Go 泛洪从自定义二进制 `Advertisement`
+    线格式切换到参考 `OspfRouteRpc` 契约——
+    - 服务身份：`ServiceNameOSPFRoute = "OspfRouteRpc"`、proto 名
+      `peer_rpc.OspfRouteRpc`、方法索引 `SyncRouteInfo = 1`（参考枚举
+      一基）；domain 仍为网络名。
+    - 线载荷：`SyncRouteInfoRequest` protobuf（`my_peer_id`/`my_session_id`/
+      `is_initiator`/`RoutePeerInfos`/`RouteConnPeerList|RouteConnBitmap`）。
+      Go LSA 的边表映射为 origin 自述项（version/last_update/proxy_cidrs）
+      + 每边一个 peer-info 项（保留 cost）+ origin 的 conn-peer-list 行；
+      解码支持 peer-list 与参考位图（`bit(i*len+j)`，行=报告者）两种
+      conn_info，未知 cost 回退 1（参考图无权）。
+    - RPC 层：`PeerRpcManager.CallDescriptor` 支持完整描述符（含 proto
+      名）；`Flooder` 增加 `SessionID/SetSessionID/NewSessionID`；收发
+      校验从旧线格式切到 `validatedAdvertisement`。
+    - 测试：线协议往返无损、参考消息形状、位图解码、node-info-only 退化、
+      越界校验、服务身份/方法索引钉死（防回归）。
+    - 剩余：与 Rust oracle 的路由互通单元验证；会话语义（dst_session_id
+      跟踪、重复 peer 检测、凭证证明）仍待后续项。
 
 ## 3. 逐模块完成度
 
@@ -86,7 +105,7 @@
 | 连接管理、ping/时延、限流 | ✅ | `peer/connection_manager.go` 等 |
 | Noise 加密会话（AEAD/重放窗口/epoch） | ✅ | `peer/secure_datagram.go`、`direct_noise_handshake.go` |
 | **旧版全局加密（xor/aes-gcm）** | ✅ | 四算法 + 密钥推导 + 尾部布局按参考实现；待互通单元验证 |
-| **OSPF 路由** | 🟡🔴 | 计算/收敛/图算法有实现+金标准测试；但线协议是**自定义 JSON 泛洪**，非 Rust `OspfRouteRpc` protobuf——**Go↔Rust 路由扩散不互通**；缺信任凭证证明、重复 peer 检测、exit-node 路由信息 |
+| **OSPF 路由** | 🟡 | 线协议已对齐参考 `OspfRouteRpc`（protobuf、方法索引 1、服务键一致，见 §2.1-11）；内部图模型仍为带权边（参考为无权 conn_map）；会话语义/凭证证明/重复 peer 检测待补 |
 | Peer RPC 骨架 | 🟡 | 域/服务/方法索引+分片+压缩可用；Rust 各 proto 服务（如 peer_direct_access）大多未注册 |
 | 中继/令牌桶/白名单 | 🟡 | `relay/` 存在；Rust foreign-network 客户端自动连接面（~2700 行）大部分缺失 |
 | Peer center | ✅❓ | 结构完整并入 runtime；但 JSON 线格式 vs Rust protobuf `PeerCenterRpc`，互通未验证 |
@@ -133,9 +152,9 @@
 - [ ] 若 CI 报出新错误：按报错逐个修复（以 CI 为编译器，本地不编译）。
 
 ### P1 — 线协议互通（决定“100% 功能”能否成立）
-- [ ] **OSPF 线协议对齐**：改用生成的 `OspfRouteRpc`/`SyncRouteInfo`/`RoutePeerInfo` protobuf
-  （`internal/proto` 已有绑定）替换 JSON 泛洪；补信任凭证证明、重复 peer 检测、exit-node 字段。
-  用 `go/testdata/compat/route` 增加金标准向量后重写 `route/` 序列化层。
+- [x] **OSPF 线协议对齐**：线协议已切换到参考 `OspfRouteRpc` protobuf（服务键、
+  方法索引、SyncRouteInfoRequest/Response、conn 位图解码，见 §2.1-11）；
+  剩余：与 Rust oracle 的路由互通单元验证、会话语义与凭证证明。
 - [x] **旧版加密（xor / aes-gcm / aes-256-gcm / chacha20）**：算法、密钥推导、尾部布局与
   管线接入已完成（见 §2.1）；剩余：与 Rust oracle 的加密互通单元验证。
 - [ ] **peer-center 线格式**：`PeerCenterRpc` protobuf + GlobalPeerMap 二进制编码对齐。

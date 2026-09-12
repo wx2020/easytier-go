@@ -40,6 +40,7 @@ type Flooder struct {
 	table       *ConvergenceTable
 	broadcast   BroadcastFunc
 
+	sessionID  uint64
 	mu         sync.Mutex
 	version    uint64
 	links      map[uint32]uint32
@@ -68,6 +69,7 @@ func NewFlooder(localPeerID uint32, table *ConvergenceTable, broadcast Broadcast
 		localPeerID: localPeerID,
 		table:       table,
 		broadcast:   broadcast,
+		sessionID:   NewSessionID(),
 		links:       make(map[uint32]uint32),
 		seen:        make(map[uint32]uint64),
 		lastSeen:    make(map[uint32]time.Time),
@@ -76,6 +78,21 @@ func NewFlooder(localPeerID uint32, table *ConvergenceTable, broadcast Broadcast
 
 // Table exposes the underlying convergence table.
 func (f *Flooder) Table() *ConvergenceTable { return f.table }
+
+// SessionID returns the local sync session identifier carried in
+// SyncRouteInfoRequest envelopes.
+func (f *Flooder) SessionID() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sessionID
+}
+
+// SetSessionID overrides the local sync session identifier.
+func (f *Flooder) SetSessionID(id uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessionID = id
+}
 
 // SetLinks replaces the local adjacency list (neighbor -> cost).
 func (f *Flooder) SetLinks(links map[uint32]uint32) {
@@ -119,7 +136,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		ProxyCIDRs: cidrs,
 		Timestamp:  time.Now().Unix(),
 	}
-	if _, err := advertisement.Marshal(); err != nil {
+	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return Advertisement{}, err
 	}
 	f.table.Accept(advertisement)
@@ -137,7 +154,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 // stored copy. fromPeer identifies the neighbor that sent it and is excluded
 // from relay. It reports whether the LSA was new.
 func (f *Flooder) Receive(ctx context.Context, advertisement Advertisement, fromPeer uint32) (bool, error) {
-	if _, err := advertisement.Marshal(); err != nil {
+	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return false, err
 	}
 	f.mu.Lock()

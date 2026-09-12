@@ -227,4 +227,4 @@ func TestNodeOSPFDisabledByDefault(t *testing.T) {
 	}
 }
 
-var _ = route.MethodOSPFAnnounce
+var _ = route.MethodOSPFRouteSync

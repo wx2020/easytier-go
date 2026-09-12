@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -282,12 +283,30 @@ func (l *WebSocketListener) ServeTLS(ctx context.Context, certFile, keyFile stri
 func (l *WebSocketListener) serve(ctx context.Context, tlsEnabled bool, certFile, keyFile string) error {
 	stop := context.AfterFunc(ctx, func() { _ = l.Close() })
 	defer stop()
-	var err error
 	if tlsEnabled {
-		err = l.server.ServeTLS(l.listener, certFile, keyFile)
-	} else {
-		err = l.server.Serve(l.listener)
+		// Without explicit key material, wss listeners provision the
+		// ephemeral self-signed certificate (insecure_tls.rs behavior).
+		if certFile == "" && keyFile == "" && (l.server.TLSConfig == nil || len(l.server.TLSConfig.Certificates) == 0) {
+			certificate, err := SelfSignedWSSCertificate()
+			if err != nil {
+				return fmt.Errorf("generate self-signed wss certificate: %w", err)
+			}
+			config := l.server.TLSConfig
+			if config == nil {
+				config = &tls.Config{}
+			} else {
+				config = config.Clone()
+			}
+			config.Certificates = []tls.Certificate{certificate}
+			l.server.TLSConfig = config
+		}
+		err := l.server.ServeTLS(l.listener, certFile, keyFile)
+		if l.isClosed() || ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve websocket listener: %w", err)
 	}
+	err := l.server.Serve(l.listener)
 	if l.isClosed() || ctx.Err() != nil || errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -376,7 +395,9 @@ func (l *WebSocketListener) handleRequest(writer http.ResponseWriter, request *h
 }
 
 // DialWebSocket connects to a websocket endpoint using ctx for the complete
-// HTTP upgrade handshake.
+// HTTP upgrade handshake. Dialing wss:// without an explicit TLSClientConfig
+// skips server verification, matching the oracle's insecure_tls dial path;
+// an IP-address host presents "localhost" as SNI.
 func DialWebSocket(ctx context.Context, address string, options ...WebSocketOptions) (*WebSocketPacketChannel, error) {
 	if ctx == nil {
 		return nil, errors.New("websocket dial context is nil")
@@ -384,6 +405,12 @@ func DialWebSocket(ctx context.Context, address string, options ...WebSocketOpti
 	configured, err := normalizeWebSocketOptions(options)
 	if err != nil {
 		return nil, err
+	}
+	if strings.HasPrefix(strings.ToLower(address), "wss://") && configured.TLSClientConfig == nil {
+		configured.TLSClientConfig = InsecureWSSClientConfig()
+		if parsed, parseErr := url.Parse(address); parseErr == nil {
+			configured.TLSClientConfig.ServerName = wssServerName(parsed.Hostname())
+		}
 	}
 	header := cloneHeader(configured.Header)
 	if configured.Origin != "" {

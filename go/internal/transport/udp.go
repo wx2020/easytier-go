@@ -21,6 +21,14 @@ const (
 	sessionQueueSize       = 128
 	maximumPendingSessions = 128
 	pendingSessionLifetime = 10 * time.Second
+
+	// holePunchControlTID and holePunchControlBodyLen shape the punch burst
+	// emitted in response to a loopback V4/V6 hole punch control datagram.
+	holePunchControlTID     = 1
+	holePunchControlBodyLen = 32
+
+	// udpHandshakeTimeout bounds one client-side SYN/SACK exchange.
+	udpHandshakeTimeout = 3 * time.Second
 )
 
 var ErrReceiveQueueFull = errors.New("UDP session receive queue is full")
@@ -51,6 +59,9 @@ type UDPSession struct {
 	connID  uint32
 	receive chan protocol.Packet
 	done    chan struct{}
+	// anySource accepts datagrams from any address with the matching
+	// connection ID; punched sockets may see NAT-rewritten source ports.
+	anySource bool
 
 	closeOnce sync.Once
 	onClose   func()
@@ -67,13 +78,19 @@ func ListenUDP(address string) (*UDPService, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen UDP on %q: %w", address, err)
 	}
+	return AdoptUDP(socket), nil
+}
+
+// AdoptUDP wraps an already-bound socket into an EasyTier UDP tunnel
+// listener. Ownership transfers to the service: Close closes the socket.
+func AdoptUDP(socket *net.UDPConn) *UDPService {
 	return &UDPService{
 		socket:   socket,
 		sessions: make(map[udpSessionKey]*UDPSession),
 		pending:  make(map[udpSessionKey]time.Time),
 		accept:   make(chan *UDPSession, sessionQueueSize),
 		done:     make(chan struct{}),
-	}, nil
+	}
 }
 
 // Address returns the bound UDP listener address.
@@ -199,7 +216,45 @@ func (s *UDPService) handleDatagram(remote *net.UDPAddr, datagram protocol.UDPDa
 		if session != nil {
 			session.shutdown()
 		}
+	case protocol.UDPPacketTypeV4HolePunch, protocol.UDPPacketTypeV6HolePunch:
+		// Loopback control datagrams direct this listener to send one hole
+		// punch burst toward the embedded address from its own socket.
+		s.handleHolePunchControl(remote, datagram)
 	}
+}
+
+// handleHolePunchControl answers a loopback V4/V6 hole punch control datagram
+// by emitting one punch packet from the listener socket to the target.
+func (s *UDPService) handleHolePunchControl(remote *net.UDPAddr, datagram protocol.UDPDatagram) {
+	target, err := protocol.DecodeHolePunchControl(datagram.Header.MessageType, datagram.Payload)
+	if err != nil {
+		return
+	}
+	isV4 := datagram.Header.MessageType == protocol.UDPPacketTypeV4HolePunch
+	fromV4 := remote.IP.To4() != nil
+	if isV4 != fromV4 {
+		return
+	}
+	if !remote.IP.IsLoopback() {
+		return
+	}
+
+	s.mu.Lock()
+	closed := s.closed
+	socket := s.socket
+	s.mu.Unlock()
+	if closed || socket == nil {
+		return
+	}
+
+	burst, err := (protocol.UDPDatagram{
+		Header:  protocol.UDPTunnelHeader{ConnectionID: holePunchControlTID, MessageType: protocol.UDPPacketTypeHolePunch},
+		Payload: make([]byte, holePunchControlBodyLen),
+	}).Marshal()
+	if err != nil {
+		return
+	}
+	_, _ = socket.WriteToUDP(burst, target)
 }
 
 func (s *UDPService) handleSYN(key udpSessionKey, remote *net.UDPAddr, datagram protocol.UDPDatagram) {
@@ -293,17 +348,38 @@ func DialUDP(ctx context.Context, address string) (*UDPSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bind UDP client socket: %w", err)
 	}
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = socket.Close()
-		}
-	}()
+	session, err := dialUDPWithSocket(ctx, socket, remote, true)
+	if err != nil {
+		_ = socket.Close()
+		return nil, err
+	}
+	return session, nil
+}
+
+// DialUDPWithSocket performs the SYN/SACK handshake over a caller-supplied
+// socket (for example a hole-punched one) toward remote. On success the
+// session owns the socket: closing it closes the socket. A non-loopback
+// remote may answer from any source address; the handshake accepts the first
+// matching SACK regardless of source so symmetric-NAT replies survive.
+func DialUDPWithSocket(ctx context.Context, socket *net.UDPConn, remote *net.UDPAddr) (*UDPSession, error) {
+	if ctx == nil {
+		return nil, errors.New("UDP dial context is nil")
+	}
+	if socket == nil || remote == nil {
+		return nil, errors.New("UDP dial socket and remote address are required")
+	}
+	return dialUDPWithSocket(ctx, socket, remote, false)
+}
+
+func dialUDPWithSocket(ctx context.Context, socket *net.UDPConn, remote *net.UDPAddr, requireSourceMatch bool) (*UDPSession, error) {
+	handshakeCtx, cancel := context.WithTimeout(ctx, udpHandshakeTimeout)
+	defer cancel()
+
 	stopCancel := make(chan struct{})
 	defer close(stopCancel)
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-handshakeCtx.Done():
 			_ = socket.Close()
 		case <-stopCancel:
 		}
@@ -326,10 +402,10 @@ func DialUDP(ctx context.Context, address string) (*UDPSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writeUDP(ctx, socket, syn, remote); err != nil {
+	if err := writeUDP(handshakeCtx, socket, syn, remote); err != nil {
 		return nil, fmt.Errorf("send UDP SYN: %w", err)
 	}
-	if err := waitForSACK(ctx, socket, remote, connID, magic); err != nil {
+	if err := waitForSACK(handshakeCtx, socket, remote, connID, magic, requireSourceMatch); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -337,13 +413,16 @@ func DialUDP(ctx context.Context, address string) (*UDPSession, error) {
 	}
 
 	session := newUDPSession(socket, remote, connID, func() { _ = socket.Close() })
-	cleanup = false
+	session.anySource = !requireSourceMatch
 	go session.readLoop()
 	return session, nil
 }
 
 // RemoteAddr returns the session peer's UDP address.
 func (s *UDPSession) RemoteAddr() net.Addr { return s.remote }
+
+// Done returns a channel closed when the session ends.
+func (s *UDPSession) Done() <-chan struct{} { return s.done }
 
 // Send serializes packet as one bounded EasyTier UDP Data datagram.
 func (s *UDPSession) Send(ctx context.Context, packet protocol.Packet) error {
@@ -465,7 +544,7 @@ func (s *UDPSession) readLoop() {
 			s.shutdown()
 			return
 		}
-		if remote.String() != s.remote.String() {
+		if !s.anySource && remote.String() != s.remote.String() {
 			continue
 		}
 		datagram, err := protocol.ParseUDPDatagram(buffer[:n])
@@ -487,7 +566,7 @@ func (s *UDPSession) readLoop() {
 	}
 }
 
-func waitForSACK(ctx context.Context, socket *net.UDPConn, remote *net.UDPAddr, connID uint32, magic uint64) error {
+func waitForSACK(ctx context.Context, socket *net.UDPConn, remote *net.UDPAddr, connID uint32, magic uint64, requireSourceMatch bool) error {
 	buffer := make([]byte, protocol.UDPTunnelHeaderSize+protocol.UDPMaxPayloadSize+1)
 	for {
 		if err := setReadDeadline(ctx, socket); err != nil {
@@ -500,7 +579,10 @@ func waitForSACK(ctx context.Context, socket *net.UDPConn, remote *net.UDPAddr, 
 			}
 			return fmt.Errorf("read UDP SACK: %w", err)
 		}
-		if sender.String() != remote.String() {
+		if requireSourceMatch && sender.String() != remote.String() {
+			continue
+		}
+		if sender.IP.String() != remote.IP.String() {
 			continue
 		}
 		datagram, err := protocol.ParseUDPDatagram(buffer[:n])

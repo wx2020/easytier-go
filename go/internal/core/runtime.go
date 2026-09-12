@@ -959,10 +959,12 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 		}
 		return peers
 	}
-	flooder, err := route.NewFlooder(r.manager.LocalPeerID(), nil, route.MeshBroadcast(peerRPC, domain, neighbors))
+	sessionID := route.NewSessionID()
+	flooder, err := route.NewFlooder(r.manager.LocalPeerID(), nil, route.MeshBroadcast(peerRPC, domain, neighbors, sessionID))
 	if err != nil {
 		return fmt.Errorf("create ospf flooder: %w", err)
 	}
+	flooder.SetSessionID(sessionID)
 	if err := peerRPC.Register(domain, route.NewOSPFService(flooder)); err != nil {
 		return fmt.Errorf("register ospf rpc service: %w", err)
 	}

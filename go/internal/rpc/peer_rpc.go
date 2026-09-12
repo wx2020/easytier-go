@@ -145,6 +145,30 @@ func (m *PeerRpcManager) Call(ctx context.Context, dstPeerID uint32, domain, ser
 	if serviceName == "" {
 		return nil, errors.New("rpc call service name is required")
 	}
+	return m.CallDescriptor(ctx, dstPeerID, &RpcDescriptor{
+		DomainName:  domain,
+		ProtoName:   m.defaultProtoName(),
+		ServiceName: serviceName,
+		MethodIndex: methodIndex,
+	}, requestBody)
+}
+
+// CallDescriptor invokes one method with a fully specified descriptor so the
+// wire service identity (including the proto package name) matches the
+// reference registry exactly.
+func (m *PeerRpcManager) CallDescriptor(ctx context.Context, dstPeerID uint32, descriptor *RpcDescriptor, requestBody []byte) ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("nil peer rpc manager")
+	}
+	if ctx == nil {
+		return nil, errors.New("rpc call context is nil")
+	}
+	if dstPeerID == 0 {
+		return nil, errors.New("rpc call destination peer is required")
+	}
+	if descriptor == nil {
+		return nil, errors.New("rpc call descriptor is required")
+	}
 
 	transactionID := m.nextTransaction.Add(1)
 	channel := &transactChannel{
@@ -158,13 +182,6 @@ func (m *PeerRpcManager) Call(ctx context.Context, dstPeerID uint32, domain, ser
 	}
 	m.transactions[transactionID] = channel
 	m.mu.Unlock()
-
-	descriptor := &RpcDescriptor{
-		DomainName:  domain,
-		ProtoName:   m.defaultProtoName(),
-		ServiceName: serviceName,
-		MethodIndex: methodIndex,
-	}
 
 	if err := m.sendFragmented(ctx, dstPeerID, transactionID, descriptor, requestBody, true); err != nil {
 		m.dropTransaction(transactionID)

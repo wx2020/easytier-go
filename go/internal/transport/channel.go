@@ -120,7 +120,15 @@ func ListenPacketChannelWithContext(ctx context.Context, scheme, address string,
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		go func() { _ = ln.Serve(ctx) }()
+		go func() {
+			if strings.EqualFold(scheme, "wss") {
+				// Serve TLS with the ephemeral self-signed certificate
+				// (insecure_tls.rs behavior for wss listeners).
+				_ = ln.ServeTLS(ctx, "", "")
+				return
+			}
+			_ = ln.Serve(ctx)
+		}()
 		return &wsPacketListener{listener: ln}, nil
 	case "unix":
 		if maxFrame == 0 {

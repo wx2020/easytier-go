@@ -99,6 +99,12 @@ type wgEpochKey struct {
 type WgCryptoState struct {
 	master []byte
 
+	// established is when the current key material became valid: state
+	// creation for the static-key epochs, or the last adopted handshake.
+	// Keys past REJECT_AFTER_TIME are refused on both paths until the
+	// session rekeys.
+	established time.Time
+
 	mu          sync.Mutex
 	sendEpoch   uint32
 	sendCount   uint64
@@ -132,9 +138,10 @@ func NewWgCryptoState(cfg WgCryptoConfig) (*WgCryptoState, error) {
 		return nil, fmt.Errorf("wg crypto master key: %w", err)
 	}
 	state := &WgCryptoState{
-		master:   master,
-		recvKeys: make(map[uint32]*wgEpochKey),
-		recvSeen: make(map[uint64]struct{}),
+		master:      master,
+		established: time.Now(),
+		recvKeys:    make(map[uint32]*wgEpochKey),
+		recvSeen:    make(map[uint64]struct{}),
 	}
 	key, err := state.epochKey(0)
 	if err != nil {
@@ -196,6 +203,22 @@ func (s *WgCryptoState) pruneKeys(now time.Time) {
 	}
 }
 
+// isExpired reports whether the current key material is past
+// REJECT_AFTER_TIME since it was established.
+func (s *WgCryptoState) isExpired(now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return now.Sub(s.established) >= wgRejectAfterTime
+}
+
+// sessionEstablishedAt reports when the current key material was
+// established (state creation or the last adopted handshake).
+func (s *WgCryptoState) sessionEstablishedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.established
+}
+
 // Seal encrypts plaintext (typically a marshaled peer body) into one
 // transport datagram: type(1) version(1) epoch(4LE) nonce(12) ciphertext.
 func (s *WgCryptoState) Seal(plaintext []byte) ([]byte, error) {
@@ -205,6 +228,9 @@ func (s *WgCryptoState) Seal(plaintext []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
+	if now.Sub(s.established) >= wgRejectAfterTime {
+		return nil, ErrWGSessionExpired
+	}
 	if err := s.ensureSendKey(now); err != nil {
 		return nil, err
 	}
@@ -242,6 +268,9 @@ func (s *WgCryptoState) Open(datagram []byte) ([]byte, error) {
 	copy(nonce[:], datagram[6:18])
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if time.Since(s.established) >= wgRejectAfterTime {
+		return nil, ErrWGSessionExpired
+	}
 	key := s.recvKeys[epoch]
 	if key == nil {
 		if s.prevKey != nil && s.prevKey.epoch == epoch {

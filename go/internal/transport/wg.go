@@ -12,6 +12,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 )
@@ -47,6 +48,15 @@ type WGService struct {
 	hsResponder *WgHandshakeResponder
 }
 
+// wgSessionRole selects the WireGuard timer behavior: dialed sessions
+// initiate handshakes (rekey), accepted sessions answer them.
+type wgSessionRole int
+
+const (
+	wgRoleInitiator wgSessionRole = iota
+	wgRoleResponder
+)
+
 // WGSession is one EasyTier WG tunnel session.
 type WGSession struct {
 	socket    *net.UDPConn
@@ -59,9 +69,23 @@ type WGSession struct {
 	crypto  *WgCryptoState
 	sendSeq atomic.Uint64
 
+	role     wgSessionRole
+	timers   wgSessionTimers
+	lastRecv atomic.Int64
+	lastSend atomic.Int64
+	// handshaked flips once a handshake completes so the initiator stops
+	// re-initiating until the session reaches REKEY_AFTER_TIME.
+	handshaked atomic.Bool
+	// keepalive counters are observability for the routine task and tests.
+	keepalivesSent atomic.Uint64
+	keepalivesRecv atomic.Uint64
+
 	// hsPending matches handshake responses to in-flight initiations.
 	hsMu      sync.Mutex
 	hsPending map[uint32]chan []byte
+	// hsSerial keeps at most one handshake in flight per session so both
+	// sides adopt rekeyed keys in the same order.
+	hsSerial sync.Mutex
 	// hsCfg retains the static identity for handshakes.
 	hsCfg *WgCryptoConfig
 }
@@ -112,6 +136,22 @@ func (s *WGService) Serve(ctx context.Context) error {
 		case <-ctx.Done():
 			_ = s.Close()
 		case <-stop:
+		}
+	}()
+	// Idle-peer janitor: mirrors the oracle listener retaining peers whose
+	// last received datagram is at most 61 seconds old.
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.done:
+				return
+			case <-ticker.C:
+				s.pruneIdleSessions(time.Now())
+			}
 		}
 	}()
 
@@ -195,10 +235,11 @@ func (s *WGService) handleHsInit(remote *net.UDPAddr, body []byte) {
 	if err != nil {
 		return
 	}
-	session, _ := s.sessionForRemote(remote)
+	session, _ := s.sessionForRemote(remote, true)
 	if session == nil || session.crypto == nil {
 		return
 	}
+	session.markRecv()
 	session.crypto.AdoptSessionKey(keys.SessionKey)
 	header := protocol.MarshalWGTunnelHeader(len(respDatagram) + 1)
 	out := make([]byte, 0, len(header)+len(respDatagram)+1)
@@ -208,9 +249,11 @@ func (s *WGService) handleHsInit(remote *net.UDPAddr, body []byte) {
 	_, _ = s.socket.WriteToUDP(out, remote)
 }
 
-// sessionForRemote returns the session for remote, creating (and surfacing
-// via Accept) when absent. The boolean reports creation.
-func (s *WGService) sessionForRemote(remote *net.UDPAddr) (*WGSession, bool) {
+// sessionForRemote returns the session for remote, creating it when absent.
+// The session is registered in the map either way; surface controls whether
+// it is announced on the accept channel. Only authenticated datagrams or
+// completed handshakes may surface a session.
+func (s *WGService) sessionForRemote(remote *net.UDPAddr, surface bool) (*WGSession, bool) {
 	key := remote.String()
 	s.mu.Lock()
 	if s.closed {
@@ -231,34 +274,34 @@ func (s *WGService) sessionForRemote(remote *net.UDPAddr) (*WGSession, bool) {
 		}
 		crypto = state
 	}
-	session = newWGSession(s.socket, remote, crypto, s.cryptoCfg, func() {
+	session = newWGSession(s.socket, remote, crypto, s.cryptoCfg, wgRoleResponder, func() {
 		s.mu.Lock()
 		delete(s.sessions, key)
 		s.mu.Unlock()
 	})
+	session.markRecv()
 	s.sessions[key] = session
 	s.mu.Unlock()
-	select {
-	case s.accept <- session:
-	default:
-		session.shutdown()
-		s.mu.Lock()
-		delete(s.sessions, key)
-		s.mu.Unlock()
+	session.startRoutine()
+	if surface && !s.surfaceSession(key, session) {
 		return nil, false
 	}
 	return session, true
 }
 
-// lookupSession returns the existing session for remote without creating one.
-func (s *WGService) lookupSession(remote *net.UDPAddr) *WGSession {
-	key := remote.String()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil
+// surfaceSession announces an authenticated session on the accept channel.
+// When nobody can take it, the session is shut down and forgotten.
+func (s *WGService) surfaceSession(key string, session *WGSession) bool {
+	select {
+	case s.accept <- session:
+		return true
+	default:
+		session.shutdown()
+		s.mu.Lock()
+		delete(s.sessions, key)
+		s.mu.Unlock()
+		return false
 	}
-	return s.sessions[key]
 }
 
 func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
@@ -288,6 +331,16 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 				// Servers never initiate; responses to unknown
 				// initiations are dropped.
 				return
+			case wgNativeKindKeepalive:
+				// Keepalives refresh activity but never create sessions.
+				s.mu.Lock()
+				session := s.sessions[remote.String()]
+				s.mu.Unlock()
+				if session != nil {
+					session.markRecv()
+					session.keepalivesRecv.Add(1)
+				}
+				return
 			}
 		}
 	}
@@ -297,10 +350,11 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 	if s.cryptoCfg == nil {
 		// Plain mode carries no native authentication; sessions bind on
 		// the first datagram (legacy handshake payload follows).
-		session, newSession := s.sessionForRemote(remote)
+		session, newSession := s.sessionForRemote(remote, true)
 		if session == nil {
 			return
 		}
+		session.markRecv()
 		packet, err := session.openDatagram(body)
 		if err != nil {
 			if newSession {
@@ -316,15 +370,26 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 		_ = session.deliver(packet)
 		return
 	}
-	// Crypto-enabled mode must never create sessions from transport data:
-	// only an authenticated handshake (handleHsInit) establishes one, so
-	// unauthenticated remotes leave no state.
-	session := s.lookupSession(remote)
+	// Crypto-enabled mode authenticates at openDatagram: the session is
+	// created up front (its static epoch-0 key mirrors the peer) but only
+	// surfaced after the first datagram authenticates, so wrong-secret
+	// remotes never appear on Accept and leave no retained state.
+	session, created := s.sessionForRemote(remote, false)
 	if session == nil {
 		return
 	}
+	session.markRecv()
 	packet, err := session.openDatagram(body)
 	if err != nil {
+		if created {
+			session.shutdown()
+			s.mu.Lock()
+			delete(s.sessions, remote.String())
+			s.mu.Unlock()
+		}
+		return
+	}
+	if created && !s.surfaceSession(remote.String(), session) {
 		return
 	}
 	// Deliver first.
@@ -382,9 +447,10 @@ func DialWGWithCrypto(ctx context.Context, address string, cfg *WgCryptoConfig) 
 		}
 		crypto = state
 	}
-	session := newWGSession(socket, remote, crypto, cfg, func() { _ = socket.Close() })
+	session := newWGSession(socket, remote, crypto, cfg, wgRoleInitiator, func() { _ = socket.Close() })
 	cleanup = false
 	go session.readLoop()
+	session.startRoutine()
 	return session, nil
 }
 
@@ -415,6 +481,7 @@ func (s *WGSession) Send(ctx context.Context, packet protocol.Packet) error {
 	if err := writeUDP(ctx, s.socket, datagram, s.remote); err != nil {
 		return fmt.Errorf("send WG peer packet: %w", err)
 	}
+	s.markSend()
 	return nil
 }
 
@@ -494,12 +561,13 @@ func (s *WGSession) Close() error {
 	return nil
 }
 
-func newWGSession(socket *net.UDPConn, remote *net.UDPAddr, crypto *WgCryptoState, hsCfg *WgCryptoConfig, onClose func()) *WGSession {
+func newWGSession(socket *net.UDPConn, remote *net.UDPAddr, crypto *WgCryptoState, hsCfg *WgCryptoConfig, role wgSessionRole, onClose func()) *WGSession {
 	return &WGSession{
 		socket:  socket,
 		remote:  remote,
 		crypto:  crypto,
 		hsCfg:   hsCfg,
+		role:    role,
 		receive: make(chan protocol.Packet, wgSessionQueueSize),
 		done:    make(chan struct{}),
 		onClose: onClose,
@@ -526,6 +594,16 @@ func (s *WGSession) shutdown() {
 	})
 }
 
+// isClosedSession reports whether the session has been shut down.
+func (s *WGSession) isClosedSession() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *WGSession) readLoop() {
 	buffer := make([]byte, protocol.WGTunnelHeaderSize+protocol.UDPMaxPayloadSize+1)
 	for {
@@ -549,9 +627,17 @@ func (s *WGSession) readLoop() {
 			if len(body) == 0 || body[0] != wgNativeMagic {
 				continue
 			}
-			if native := body[1:]; len(native) > 0 && native[0] == wgHsTypeResp {
-				s.routeHsResp(append([]byte(nil), native...))
-				continue
+			if native := body[1:]; len(native) > 0 {
+				switch native[0] {
+				case wgHsTypeResp:
+					s.markRecv()
+					s.routeHsResp(append([]byte(nil), native...))
+					continue
+				case wgNativeKindKeepalive:
+					s.markRecv()
+					s.keepalivesRecv.Add(1)
+					continue
+				}
 			}
 		}
 		if n < protocol.WGTunnelHeaderSize+protocol.PeerManagerHeaderSize {
@@ -561,6 +647,7 @@ func (s *WGSession) readLoop() {
 		if err != nil {
 			continue
 		}
+		s.markRecv()
 		_ = s.deliver(packet)
 	}
 }
@@ -588,6 +675,8 @@ func (s *WGSession) routeHsResp(body []byte) {
 // adopting the session key for forward secrecy. Data sent before the
 // handshake uses the static identity keys; after success both sides move
 // to the handshaked key. Without session crypto it returns an error.
+// Concurrent handshakes on one session are serialized so the responder
+// and initiator adopt rotated keys in the same order.
 func (s *WGSession) Handshake(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("WG handshake context is nil")
@@ -595,6 +684,15 @@ func (s *WGSession) Handshake(ctx context.Context) error {
 	if s.crypto == nil || s.hsCfg == nil {
 		return errors.New("WG handshake requires session crypto")
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return net.ErrClosed
+	default:
+	}
+	s.hsSerial.Lock()
+	defer s.hsSerial.Unlock()
 	var idxBytes [4]byte
 	if _, err := rand.Read(idxBytes[:]); err != nil {
 		return fmt.Errorf("WG handshake index: %w", err)
@@ -635,6 +733,7 @@ func (s *WGSession) Handshake(ctx context.Context) error {
 			return err
 		}
 		s.crypto.AdoptSessionKey(keys.SessionKey)
+		s.handshaked.Store(true)
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
