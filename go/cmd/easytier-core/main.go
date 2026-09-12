@@ -441,6 +441,21 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 	}
 	// When TUN was created but destination is 0, we allow it for dynamic routing.
 	// For the case where shouldCreateTUN is false, TUN remains nil (no-TUN mode).
+	// Global traffic encryption keys derive from the network secret; nil keeps
+	// the null cipher, which rejects inbound encrypted packets.
+	var legacyCipher peer.LegacyCipher
+	if enableEncryption {
+		encryptionAlgorithm := ""
+		if cfg.Flags != nil {
+			encryptionAlgorithm = cfg.Flags.EncryptionAlgorithm
+		}
+		key128, key256 := protocol.DeriveLegacyKeys(cfg.NetworkIdentity.NetworkSecret)
+		cipher, err := peer.NewLegacyCipher(encryptionAlgorithm, key128, key256)
+		if err != nil {
+			return nil, fmt.Errorf("create legacy cipher: %w", err)
+		}
+		legacyCipher = cipher
+	}
 	opts := core.NodeOptions{
 		Address:    tcpAddress,
 		UDPAddress: udpAddress,
@@ -449,6 +464,7 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 			LocalPeerID:      identity.PeerID,
 			LegacyIdentity:   identity,
 			DataCompressAlgo: algorithm,
+			LegacyCipher:     legacyCipher,
 		},
 		NoTUN:            noTun,
 		EnableEncryption: enableEncryption,

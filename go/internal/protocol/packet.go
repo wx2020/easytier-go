@@ -59,20 +59,33 @@ func (h *PeerManagerHeader) SetCompressed(compressed bool) {
 	}
 }
 
+func (h PeerManagerHeader) IsEncrypted() bool { return h.Flags&FlagEncrypted != 0 }
+
+func (h *PeerManagerHeader) SetEncrypted(encrypted bool) {
+	if encrypted {
+		h.Flags |= FlagEncrypted
+	} else {
+		h.Flags &^= FlagEncrypted
+	}
+}
+
 // Packet is a complete EasyTier peer packet without a transport envelope.
 type Packet struct {
 	Header  PeerManagerHeader
 	Payload []byte
 }
 
-// MarshalBody serializes the peer header followed by its payload.
+// MarshalBody serializes the peer header followed by its payload. Header len
+// is only derived here for plaintext packets; encrypted and compressed
+// packets keep the caller's len so it stays at the pre-transform payload
+// length, matching the reference wire bytes.
 func (p Packet) MarshalBody() ([]byte, error) {
 	if uint64(len(p.Payload)) > uint64(^uint32(0)) {
 		return nil, fmt.Errorf("peer payload exceeds uint32 length: %d", len(p.Payload))
 	}
-	if p.Header.Flags&FlagCompressed == 0 {
+	if p.Header.Flags&(FlagCompressed|FlagEncrypted) == 0 {
 		p.Header.Length = uint32(len(p.Payload))
-	} else if len(p.Payload) < CompressionTailSize {
+	} else if p.Header.Flags&FlagCompressed != 0 && len(p.Payload) < CompressionTailSize {
 		return nil, fmt.Errorf("compressed peer packet is missing algorithm tail")
 	}
 
@@ -95,7 +108,9 @@ func ParseBody(body []byte) (Packet, error) {
 
 	payloadLength := binary.LittleEndian.Uint32(body[12:16])
 	wirePayloadLength := len(body) - PeerManagerHeaderSize
-	if body[9]&FlagCompressed == 0 && payloadLength != uint32(wirePayloadLength) {
+	// The reference leaves header len at the pre-encryption, pre-compression
+	// payload length, so strict equality only holds for plaintext packets.
+	if body[9]&(FlagCompressed|FlagEncrypted) == 0 && payloadLength != uint32(wirePayloadLength) {
 		return Packet{}, fmt.Errorf("uncompressed peer payload length %d does not match body length %d", payloadLength, len(body)-PeerManagerHeaderSize)
 	}
 	if body[9]&FlagCompressed != 0 && wirePayloadLength < CompressionTailSize {

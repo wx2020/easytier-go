@@ -35,6 +35,30 @@
    artifact 根目录结构不变，消费端 `/tmp/easytier-core*` 兼容。
 4. 新增根目录 `AGENTS.md`（后续 agent 的仓库须知）。
 
+### 2.1 第二轮：旧版流量加密（P1 项，洁净室实现，待 CI 验证）
+
+5. **`protocol.DeriveLegacyKeys(secret)`**：复刻参考实现的 128/256 位全局流量密钥
+   推导（SipHash-1-3 链式块 + `easytier-256bit-key` 盐）。向量用独立 Perl
+   BigInt 镜像计算，先用 `go/testdata/compat/digest` 金标准校验镜像正确性。
+6. **`go/internal/peer/legacy_encrypt.go`**：`LegacyCipher` 接口 + 四种实现——
+   `xor`（128 位密钥循环异或）、`aes-gcm`（AES-128-GCM）、`aes-256-gcm`、
+   `chacha20`（ChaCha20-Poly1305），线尾部 `ciphertext||tag[16]||nonce[12]`、
+   空 AAD、随机 12 字节 nonce，均按 `docs/GO_REWRITE_SE.md` §4.3 与参考行为
+   规范实现；未知算法名回退参考默认 `aes-gcm`；`NullLegacyCipher` 拒收
+   加密包（对应参考 enable_encryption=false）。
+7. **头部约定对齐**：参考实现加密后头部 `len` 保持**明文长度**（AEAD 尾部
+   不计入）。Go 的 `ParseBody`/`MarshalBody` 相应放宽：仅未加密未压缩包做
+   严格长度校验，加密包保留调用方 `len`。新增 `IsEncrypted`/`SetEncrypted`
+   头部助手。
+8. **管线接入**：`PeerConnectionManagerConfig.LegacyCipher`（nil→Null）、
+   `PeerSession.Send` 压缩后加密（仅 legacy 会话，Noise 会话不受影响）、
+   `receiveSession` 解密失败丢包并计数（对齐参考 `decrypt failed → continue`）。
+   `cmd/easytier-core/main.go` 从 `flags.enable_encryption` +
+   `flags.encryption_algorithm` + 网络密钥装配 cipher。
+9. **测试**：密钥推导/XOR 金标准向量（镜像生成）；AEAD 尾部布局、确定性
+   nonce、防篡改、回退一致性、Null 语义单元测试；core 包真实 TCP+legacy
+   握手+aes-gcm 数据面端到端测试。
+
 ## 3. 逐模块完成度
 
 图例：✅ 完整（有实现+测试）　🟡 部分　🔴 缺失/仅原型　❓ 未验证（需互通测试）
@@ -57,7 +81,7 @@
 | --- | --- | --- |
 | 连接管理、ping/时延、限流 | ✅ | `peer/connection_manager.go` 等 |
 | Noise 加密会话（AEAD/重放窗口/epoch） | ✅ | `peer/secure_datagram.go`、`direct_noise_handshake.go` |
-| **旧版全局加密（xor/aes-gcm）** | 🔴 | 仅 proto 枚举存在，无实现——Rust 兼容模式互通会失败 |
+| **旧版全局加密（xor/aes-gcm）** | ✅ | 四算法 + 密钥推导 + 尾部布局按参考实现；待互通单元验证 |
 | **OSPF 路由** | 🟡🔴 | 计算/收敛/图算法有实现+金标准测试；但线协议是**自定义 JSON 泛洪**，非 Rust `OspfRouteRpc` protobuf——**Go↔Rust 路由扩散不互通**；缺信任凭证证明、重复 peer 检测、exit-node 路由信息 |
 | Peer RPC 骨架 | 🟡 | 域/服务/方法索引+分片+压缩可用；Rust 各 proto 服务（如 peer_direct_access）大多未注册 |
 | 中继/令牌桶/白名单 | 🟡 | `relay/` 存在；Rust foreign-network 客户端自动连接面（~2700 行）大部分缺失 |
@@ -108,8 +132,8 @@
 - [ ] **OSPF 线协议对齐**：改用生成的 `OspfRouteRpc`/`SyncRouteInfo`/`RoutePeerInfo` protobuf
   （`internal/proto` 已有绑定）替换 JSON 泛洪；补信任凭证证明、重复 peer 检测、exit-node 字段。
   用 `go/testdata/compat/route` 增加金标准向量后重写 `route/` 序列化层。
-- [ ] **旧版加密（xor / aes-gcm）**：按 SE §4 会话规范实现 legacy EncryptionMethod 协商与数据面；
-  `go/testdata/compat/secure` 建向量。
+- [x] **旧版加密（xor / aes-gcm / aes-256-gcm / chacha20）**：算法、密钥推导、尾部布局与
+  管线接入已完成（见 §2.1）；剩余：与 Rust oracle 的加密互通单元验证。
 - [ ] **peer-center 线格式**：`PeerCenterRpc` protobuf + GlobalPeerMap 二进制编码对齐。
 - [ ] **QUIC**：接真 QUIC（建议 quic-go + 与 Rust quinn-plaintext 对齐的 TLS 设置或 plaintext 扩展），
   或在 TODOLIST/README 明确宣布 Go 产品矩阵不含 QUIC 隧道（移除 `quic://` scheme 以免误配）。

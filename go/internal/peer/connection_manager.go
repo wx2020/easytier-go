@@ -43,6 +43,12 @@ type PeerConnectionManagerConfig struct {
 	LegacyIdentity  LegacyIdentity
 	DirectHandshake DirectPeerHandshakeConfig
 
+	// LegacyCipher applies the reference global traffic encryption
+	// (xor/aes-gcm/aes-256-gcm/chacha20) to sessions that did not negotiate
+	// Noise. Nil selects the null cipher, which rejects inbound encrypted
+	// packets like the reference when encryption is disabled.
+	LegacyCipher LegacyCipher
+
 	MaxPeers    int
 	PacketQueue int
 	Routes      map[uint32]uint32
@@ -63,6 +69,7 @@ type PeerSession struct {
 	Channel             PacketChannel
 	Router              *PacketRouter
 	Secure              *SecureDatagramSession
+	Legacy              LegacyCipher
 	AuthenticationLevel AuthenticationLevel
 	DataCompressAlgo    protocol.CompressionAlgorithm
 	ACL                 *acl.Policy
@@ -93,6 +100,10 @@ func (s *PeerSession) Send(ctx context.Context, packet protocol.Packet) error {
 		}
 		packet.Payload = payload
 		packet.Header.Flags |= protocol.FlagEncrypted
+	} else if s.Legacy != nil {
+		if err := s.Legacy.Encrypt(&packet); err != nil {
+			return err
+		}
 	}
 	return s.Channel.Send(ctx, packet)
 }
@@ -115,6 +126,7 @@ type PeerConnectionManager struct {
 	mode             HandshakeMode
 	legacy           LegacyIdentity
 	direct           DirectPeerHandshakeConfig
+	legacyCipher     LegacyCipher
 	maxPeers         int
 	dataCompressAlgo protocol.CompressionAlgorithm
 	router           *PacketRouter
@@ -224,6 +236,10 @@ func NewPeerConnectionManager(config PeerConnectionManagerConfig) (*PeerConnecti
 	if config.DataCompressAlgo != protocol.CompressionNone && config.DataCompressAlgo != protocol.CompressionZstd {
 		return nil, fmt.Errorf("unsupported data compression algorithm %d", config.DataCompressAlgo)
 	}
+	legacyCipher := config.LegacyCipher
+	if legacyCipher == nil {
+		legacyCipher = NullLegacyCipher{}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerConnectionManager{
@@ -231,6 +247,7 @@ func NewPeerConnectionManager(config PeerConnectionManagerConfig) (*PeerConnecti
 		mode:             mode,
 		legacy:           legacy,
 		direct:           direct,
+		legacyCipher:     legacyCipher,
 		maxPeers:         maxPeers,
 		dataCompressAlgo: config.DataCompressAlgo,
 		router:           router,
@@ -360,6 +377,7 @@ func (m *PeerConnectionManager) handleConnection(ctx context.Context, channel Pa
 		Channel:             channel,
 		Router:              m.router,
 		Secure:              secure,
+		Legacy:              m.legacyCipher,
 		AuthenticationLevel: level,
 		DataCompressAlgo:    m.dataCompressAlgo,
 		ACL:                 m.acl,
@@ -447,6 +465,14 @@ func (m *PeerConnectionManager) receiveSession(session *PeerSession) {
 			packet.Header.Flags &^= protocol.FlagEncrypted
 			if !packet.Header.IsCompressed() {
 				packet.Header.Length = uint32(len(plaintext))
+			}
+		} else if session.Legacy != nil {
+			if err := session.Legacy.Decrypt(&packet); err != nil {
+				m.addStat("peer_decrypt_errors", 1)
+				continue
+			}
+			if !packet.Header.IsCompressed() {
+				packet.Header.Length = uint32(len(packet.Payload))
 			}
 		}
 		if err := protocol.DecompressPacket(&packet); err != nil {
