@@ -1205,7 +1205,7 @@ func verifyQUICGenericChannel(t *testing.T) {
 			done <- err
 			return
 		}
-		defer sess.(interface{ Close() error }).Close()
+		defer sess.Close()
 		pkt, err := sess.Receive(ctx)
 		if err != nil {
 			done <- err
@@ -1217,7 +1217,7 @@ func verifyQUICGenericChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialQUIC failed: %v", err)
 	}
-	defer ch.(interface{ Close() error }).Close()
+	defer ch.Close()
 	payload := []byte("generic-quic")
 	if err := ch.Send(ctx, protocol.Packet{Header: protocol.PeerManagerHeader{FromPeerID: 1, ToPeerID: 2, PacketType: protocol.PacketTypeData}, Payload: payload}); err != nil {
 		t.Fatalf("generic quic send failed: %v", err)
