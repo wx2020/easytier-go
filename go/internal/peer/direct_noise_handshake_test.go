@@ -25,7 +25,7 @@ func TestDirectPeerHandshakeRoundTrip(t *testing.T) {
 		session, level, identity, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
 		serverResult <- handshakeResult{session: session, level: level, identity: identity, err: err}
 	}()
-	clientSession, clientLevel, identity, err := InitiateDirectPeerHandshake(ctx, client, clientConfig)
+	clientSession, clientLevel, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig)
 	if err != nil {
 		select {
 		case serverErr := <-serverResult:
