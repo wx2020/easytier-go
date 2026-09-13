@@ -22,6 +22,16 @@ func TestSignTrustedCredentialProofGolden(t *testing.T) {
 	wire := append([]byte{0x0a, 0x20}, pubkey[:]...)
 	credential := &peerrpc.TrustedCredentialPubkey{Pubkey: pubkey[:]}
 
+	// The golden vector only transfers if the protobuf encoding matches the
+	// hand-written bytes.
+	encoded, err := proto.Marshal(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(encoded, wire) {
+		t.Fatalf("credential encoding = %x, want %x", encoded, wire)
+	}
+
 	proof, err := SignTrustedCredentialProof(credential, "mesh-secret")
 	if err != nil {
 		t.Fatal(err)
