@@ -83,7 +83,7 @@ func NewOSPFService(flooder *Flooder, cfg *OSPFServiceConfig) *rpc.FuncService {
 		// Reference check_duplicate_peer_id: conflicting route identities
 		// with version regressions flag duplicated peer ids.
 		if duplicate := checkDuplicatePeerID(flooder, request, fromPeerID); duplicate {
-			return syncRouteInfoErrorResponse(flooder), nil
+			return syncRouteInfoErrorResponse(flooder)
 		}
 		// Credential peers may only propagate their own route info, and
 		// their connection info requires a verified relay permission.
@@ -119,7 +119,7 @@ func checkDuplicatePeerID(flooder *Flooder, request *peerrpc.SyncRouteInfoReques
 		case myPeerID:
 			// The sender floods an entry about us: a different route id
 			// with a higher version means our own peer id is duplicated.
-			if item.GetPeerRouteId() != myRouteID && item.GetVersion() > flooder.OriginVersion() {
+			if item.GetPeerRouteId() != myRouteID && uint64(item.GetVersion()) > flooder.OriginVersion() {
 				return true
 			}
 		case fromPeerID:
@@ -127,7 +127,7 @@ func checkDuplicatePeerID(flooder *Flooder, request *peerrpc.SyncRouteInfoReques
 			// lower version than the stored one means the sender's peer id
 			// is duplicated between two live nodes.
 			if stored := flooder.PeerRouteID(fromPeerID); stored != 0 &&
-				item.GetPeerRouteId() != stored && item.GetVersion() < flooder.SeenVersion(fromPeerID) {
+				item.GetPeerRouteId() != stored && uint64(item.GetVersion()) < flooder.SeenVersion(fromPeerID) {
 				return true
 			}
 		}
@@ -136,7 +136,7 @@ func checkDuplicatePeerID(flooder *Flooder, request *peerrpc.SyncRouteInfoReques
 }
 
 // syncRouteInfoErrorResponse builds the reference duplicate-peer rejection.
-func syncRouteInfoErrorResponse(flooder *Flooder) []byte {
+func syncRouteInfoErrorResponse(flooder *Flooder) ([]byte, error) {
 	duplicate := peerrpc.SyncRouteInfoError_DuplicatePeerId
 	response := &peerrpc.SyncRouteInfoResponse{
 		IsInitiator: false,

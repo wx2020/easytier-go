@@ -22,7 +22,7 @@ func NewSessionTracker() *SessionTracker {
 
 // Observe records the sender's session identifier and reports whether it
 // changed since the previous request from that peer.
-func (t *SessionTracker) Observe(peerID, sessionID uint64) (changed bool) {
+func (t *SessionTracker) Observe(peerID uint32, sessionID uint64) (changed bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if previous, ok := t.dstSessions[peerID]; ok && previous == sessionID {
