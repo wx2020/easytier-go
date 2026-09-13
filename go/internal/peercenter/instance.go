@@ -148,16 +148,15 @@ func (i *Instance) getJob(ctx context.Context, centerPeer uint32) JobResult {
 	// The reference has no explicit no-update flag: a digest that matches
 	// the local one means the map is current (the digest is only compared
 	// within one implementation, so cross-implementation fetches simply
-	// never short-circuit).
-	if response.GetDigest() != nil && Digest(response.GetDigest()) == digest {
+	// never short-circuit). GetDigest() yields 0 for the optional-absent
+	// case, which matches the initial local digest of 0.
+	if Digest(response.GetDigest()) == digest {
 		return JobResult{SleepTime: getGlobalPeerMapInterval}
 	}
 
 	i.mu.Lock()
 	i.globalPeerMap = globalPeerMapFromProto(response)
-	if response.GetDigest() != nil {
-		i.digest = Digest(response.GetDigest())
-	}
+	i.digest = Digest(response.GetDigest())
 	i.updateTime = time.Now()
 	i.mu.Unlock()
 	return JobResult{SleepTime: getGlobalPeerMapInterval}
