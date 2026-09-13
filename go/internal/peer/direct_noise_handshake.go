@@ -126,7 +126,7 @@ func InitiateDirectPeerHandshake(ctx context.Context, channel PacketChannel, con
 
 	session, err := NewSecureDatagramSession(rootKey[:], config.CipherSuite, epoch, DirectionInitiatorToResponder, DirectionResponderToInitiator)
 	if err != nil {
-		return nil, 0, PeerIdentityUnknown, PeerIdentityUnknown, fmt.Errorf("create secure datagram session: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("create secure datagram session: %w", err)
 	}
 	level := directHandshakeLevel(config)
 	return session, level, classifyDirectPeerIdentity(config, level, handshake.PeerStatic()), nil

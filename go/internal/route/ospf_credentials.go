@@ -100,13 +100,14 @@ func TrustedCredentialPubkeyFrom(cred credential.Credential) *peerrpc.TrustedCre
 	for _, prefix := range cred.ProxyCIDRs {
 		cidrs = append(cidrs, prefix.String())
 	}
+	reusable := cred.Reusable
 	return &peerrpc.TrustedCredentialPubkey{
 		Pubkey:            append([]byte(nil), cred.PublicKey[:]...),
 		Groups:            append([]string(nil), cred.Groups...),
 		AllowRelay:        cred.RelayAllowed,
 		ExpiryUnix:        cred.ExpiresAt.Unix(),
 		AllowedProxyCidrs: cidrs,
-		Reusable:          cred.Reusable,
+		Reusable:          &reusable,
 	}
 }
 
