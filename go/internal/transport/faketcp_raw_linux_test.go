@@ -96,15 +96,15 @@ func TestStripEthernetWithVLAN(t *testing.T) {
 	frame[12], frame[13] = 0x08, 0x00
 	copy(frame[14:], inner)
 	payload, ethType, err := stripEthernet(frame)
-	if err != nil || ethType != linuxEthTypeIPv4 || len(payload) != len(inner) {
+	if err != nil || ethType != captureEthTypeIPv4 || len(payload) != len(inner) {
 		t.Fatalf("strip = %d %v", ethType, err)
 	}
 	tagged := make([]byte, 18+len(inner))
 	tagged[12], tagged[13] = 0x81, 0x00
-	binary.BigEndian.PutUint16(tagged[16:18], linuxEthTypeIPv4)
+	binary.BigEndian.PutUint16(tagged[16:18], captureEthTypeIPv4)
 	copy(tagged[18:], inner)
 	payload, ethType, err = stripEthernet(tagged)
-	if err != nil || ethType != linuxEthTypeIPv4 || len(payload) != len(inner) {
+	if err != nil || ethType != captureEthTypeIPv4 || len(payload) != len(inner) {
 		t.Fatalf("vlan strip = %d %v", ethType, err)
 	}
 }
