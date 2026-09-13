@@ -327,3 +327,31 @@ choice relative to the Rust oracle.
   scheme (`ListenRing`/`DialRing` plus `CreateRingTunnelPair`), mirroring
   `tunnel/ring.rs` semantics (two unidirectional bounded queues of 128,
   registry-driven connect). Test convenience; no wire impact.
+
+### 11.4 P1 interop records (peer-center, QUIC)
+
+* **peer-center wire format (PEER-01).** The Go peer-center RPC previously
+  used JSON bodies over a `peer_center` service with zero-based method
+  indexes. It now speaks the reference contract: service `PeerCenterRpc` in
+  proto package `peer_rpc`, domain = network name, one-based method indexes
+  (`ReportPeers` = 1, `GetGlobalPeerMap` = 2), and the reference protobuf
+  messages (`ReportPeersRequest/Response`, `GetGlobalPeerMapRequest/Response`,
+  `PeerInfoForGlobalMap`, `DirectConnectedPeerInfo`, `GlobalPeerMap`).
+  The reference response carries no explicit no-update flag; the client
+  treats a returned digest equal to its local digest as "no update". Digest
+  values are implementation-internal (computed over the local map), so a
+  cross-implementation client simply never short-circuits and always
+  receives the map.
+* **QUIC tunnel descope (NET-07).** The Go `quic://` tunnel transport is a
+  Go-only test double (UDP SYN/SACK framing mimicking quinn-plaintext
+  frames) and cannot interoperate with the reference, which requires a
+  patched plaintext quinn stack that no maintained Go QUIC library provides.
+  Decision: the `quic://` scheme is **removed from the Go public transport
+  surface** (`DialPacketChannel`/`ListenPacketChannel` reject it with
+  `ErrQuicTunnelDisabled`); config vocabulary (`ProtocolQUIC`, port offsets,
+  `--quic-listen-port`) remains accepted for compatibility but the tunnel
+  cannot be established. The gateway-side QUIC **proxy** (`gateway/quic.go`,
+  lossy-network proxy) is unaffected. Go-only transport exercises remain in
+  the interop tests with explicit descope labeling. Restoring QUIC requires
+  a real QUIC implementation interoperating with quinn-plaintext, tracked
+  in `REWRITE_PROGRESS_TODO.md` P1.

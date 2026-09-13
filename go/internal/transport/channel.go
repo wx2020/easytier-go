@@ -5,12 +5,18 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 )
+
+// ErrQuicTunnelDisabled reports the descope of the quic:// tunnel scheme in
+// the Go build: the reference implementation rides quinn-plaintext, which
+// this build does not interoperate with (docs/GO_REWRITE_SE.md §11.4).
+var ErrQuicTunnelDisabled = errors.New("quic tunnel transport is disabled in the Go build (reference quinn-plaintext interop descoped)")
 
 // PacketListener is the transport-neutral accept contract used by listeners.
 type PacketListener interface {
@@ -46,7 +52,7 @@ func DialPacketChannel(ctx context.Context, scheme, address string, maxFrame int
 	case "wg":
 		return DialWG(ctx, address, opts...)
 	case "quic":
-		return DialQUIC(ctx, address, opts...)
+		return nil, ErrQuicTunnelDisabled
 	case "faketcp", "fake-tcp":
 		return DialFakeTCP(ctx, address, maxFrame, opts...)
 	case "ring":
@@ -108,12 +114,7 @@ func ListenPacketChannelWithContext(ctx context.Context, scheme, address string,
 		go func() { _ = svc.Serve(ctx) }()
 		return &wgPacketListener{service: svc}, nil
 	case "quic":
-		svc, err := ListenQUIC(address, opts...)
-		if err != nil {
-			return nil, err
-		}
-		go func() { _ = svc.Serve(ctx) }()
-		return &quicPacketListener{service: svc}, nil
+		return nil, ErrQuicTunnelDisabled
 	case "faketcp", "fake-tcp":
 		svc, err := ListenFakeTCP(address, maxFrame, opts...)
 		if err != nil {

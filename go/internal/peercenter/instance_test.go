@@ -93,11 +93,11 @@ func TestInstanceReportsAndGetsGlobalPeerMap(t *testing.T) {
 		routes:   []PeerRoute{{PeerID: 1}},
 	}
 
-	instanceA, err := NewInstance(providerA, mgrA)
+	instanceA, err := NewInstance(providerA, mgrA, "test-mesh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	instanceB, err := NewInstance(providerB, mgrB)
+	instanceB, err := NewInstance(providerB, mgrB, "test-mesh")
 	if err != nil {
 		t.Fatal(err)
 	}

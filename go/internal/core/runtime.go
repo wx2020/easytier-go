@@ -1232,7 +1232,7 @@ func (r *nodeRuntime) initCenter(ctx context.Context) error {
 	r.peerRPC = peerRPC
 	r.stateMu.Unlock()
 	r.installRPCPipeline()
-	center, err := peercenter.NewInstance(&runtimePeerInfoProvider{runtime: r}, peerRPC)
+	center, err := peercenter.NewInstance(&runtimePeerInfoProvider{runtime: r}, peerRPC, centerDomain)
 	if err != nil {
 		return fmt.Errorf("create peer-center instance: %w", err)
 	}

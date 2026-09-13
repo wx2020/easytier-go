@@ -1037,6 +1037,7 @@ func testQUICLegacy(t *testing.T, direction string) {
 	if tryRustQUICLegacy(t, direction) {
 		return
 	}
+	t.Logf("Go-only QUIC transport exercise: reference quinn-plaintext interop is descoped (GO_REWRITE_SE.md section 11.4)")
 	service, err := transport.ListenQUIC("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -1189,14 +1190,17 @@ func verifyQUICGenericChannel(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	ln, err := transport.ListenPacketChannel("quic", "127.0.0.1:0")
+	// The quic:// scheme is disabled on the public channel surface; this
+	// exercise drives the Go-only QUIC transport directly.
+	svc, err := transport.ListenQUIC("127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("ListenPacketChannel quic failed: %v", err)
+		t.Fatalf("ListenQUIC failed: %v", err)
 	}
-	defer ln.Close()
+	defer svc.Close()
+	go func() { _ = svc.Serve(ctx) }()
 	done := make(chan error, 1)
 	go func() {
-		sess, err := ln.Accept(ctx)
+		sess, err := svc.Accept(ctx)
 		if err != nil {
 			done <- err
 			return
@@ -1209,9 +1213,9 @@ func verifyQUICGenericChannel(t *testing.T) {
 		}
 		done <- sess.Send(ctx, pkt)
 	}()
-	ch, err := transport.DialPacketChannel(ctx, "quic", ln.Address().String(), 0)
+	ch, err := transport.DialQUIC(ctx, svc.Address().String())
 	if err != nil {
-		t.Fatalf("DialPacketChannel quic failed: %v", err)
+		t.Fatalf("DialQUIC failed: %v", err)
 	}
 	defer ch.(interface{ Close() error }).Close()
 	payload := []byte("generic-quic")
@@ -1321,6 +1325,7 @@ func testQUICNoise(t *testing.T, direction string) {
 	if tryRustQUICNoise(t, direction) {
 		return
 	}
+	t.Logf("Go-only QUIC transport exercise: reference quinn-plaintext interop is descoped (GO_REWRITE_SE.md section 11.4)")
 	clientCfg, serverCfg := noiseConfigs(t)
 	service, err := transport.ListenQUIC("127.0.0.1:0")
 	if err != nil {
@@ -1424,7 +1429,7 @@ func tryRustQUICLegacy(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("QUIC legacy Rust interop requested but Go QUIC is plaintext UDP; falling back to Go-Go")
+	t.Logf("QUIC Rust interop is descoped: Go QUIC is a Go-only test double (GO_REWRITE_SE.md section 11.4); falling back to Go-Go")
 	return false
 }
 

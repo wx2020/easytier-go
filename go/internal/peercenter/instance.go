@@ -5,20 +5,31 @@ package peercenter
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
+	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 	"github.com/EasyTier/EasyTier/go/internal/rpc"
 )
 
-// RPC service and method identifiers for the peer-center service.
+// RPC service and method identifiers for the peer-center service. They match
+// the reference registry exactly: domain = network name, service name
+// PeerCenterRpc in the peer_rpc proto package, and one-based method indexes
+// following the proto service declaration order (ReportPeers, then
+// GetGlobalPeerMap).
 const (
-	ServiceNamePeerCenter         = "peer_center"
-	MethodGetGlobalPeerMap uint32 = 0
+	PeerCenterProtoName           = "peer_rpc.PeerCenterRpc"
+	ServiceNamePeerCenter         = "PeerCenterRpc"
 	MethodReportPeers      uint32 = 1
+	MethodGetGlobalPeerMap uint32 = 2
 )
+
+// DefaultRPCDomain is the fallback scoping domain. The reference registers
+// peer-center under the network name; callers should always pass it.
+const DefaultRPCDomain = "peer_center"
 
 // Scheduling constants mirror the Rust PeerCenterInstance jobs.
 const (
@@ -38,6 +49,7 @@ type Instance struct {
 	provider PeerInfoProvider
 	rpcMgr   *rpc.PeerRpcManager
 	server   *Server
+	domain   string
 
 	getRunner    *Runner
 	reportRunner *Runner
@@ -53,18 +65,23 @@ type Instance struct {
 }
 
 // NewInstance creates a peer-center instance bound to one peer RPC manager.
-// The provider must be non-nil.
-func NewInstance(provider PeerInfoProvider, mgr *rpc.PeerRpcManager) (*Instance, error) {
+// The provider and domain must be non-empty; the reference registers and
+// calls peer-center under the network-name domain.
+func NewInstance(provider PeerInfoProvider, mgr *rpc.PeerRpcManager, domain string) (*Instance, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("peer center provider is required")
 	}
 	if mgr == nil {
 		return nil, fmt.Errorf("peer center rpc manager is required")
 	}
+	if domain == "" {
+		domain = DefaultRPCDomain
+	}
 	return &Instance{
 		provider: provider,
 		rpcMgr:   mgr,
 		server:   NewServer(),
+		domain:   domain,
 	}, nil
 }
 
@@ -116,7 +133,7 @@ func (i *Instance) getJob(ctx context.Context, centerPeer uint32) JobResult {
 	digest := i.digest
 	i.mu.Unlock()
 
-	requestBody, err := json.Marshal(getGlobalPeerMapRequest{Digest: digest})
+	requestBody, err := proto.Marshal(&peerrpc.GetGlobalPeerMapRequest{Digest: uint64(digest)})
 	if err != nil {
 		return JobResult{Err: err}
 	}
@@ -124,17 +141,23 @@ func (i *Instance) getJob(ctx context.Context, centerPeer uint32) JobResult {
 	if err != nil {
 		return JobResult{Err: err}
 	}
-	var response getGlobalPeerMapResponse
-	if err := json.Unmarshal(responseBody, &response); err != nil {
+	response := &peerrpc.GetGlobalPeerMapResponse{}
+	if err := proto.Unmarshal(responseBody, response); err != nil {
 		return JobResult{Err: fmt.Errorf("decode get_global_peer_map response: %w", err)}
 	}
-	if response.NoUpdate {
+	// The reference has no explicit no-update flag: a digest that matches
+	// the local one means the map is current (the digest is only compared
+	// within one implementation, so cross-implementation fetches simply
+	// never short-circuit).
+	if response.GetDigest() != nil && Digest(response.GetDigest()) == digest {
 		return JobResult{SleepTime: getGlobalPeerMapInterval}
 	}
 
 	i.mu.Lock()
-	i.globalPeerMap = peerMapFromResponse(response)
-	i.digest = response.Digest
+	i.globalPeerMap = globalPeerMapFromProto(response)
+	if response.GetDigest() != nil {
+		i.digest = Digest(response.GetDigest())
+	}
 	i.updateTime = time.Now()
 	i.mu.Unlock()
 	return JobResult{SleepTime: getGlobalPeerMapInterval}
@@ -176,10 +199,11 @@ func (i *Instance) reportJob(ctx context.Context, centerPeer uint32) JobResult {
 		return JobResult{SleepTime: reportPeersInterval}
 	}
 
-	requestBody, err := json.Marshal(reportPeersRequest{
-		MyPeerID: myPeerID,
-		Peers:    peers,
-	})
+	request := &peerrpc.ReportPeersRequest{
+		MyPeerId:  myPeerID,
+		PeerInfos: peerInfoForGlobalMapProto(peers),
+	}
+	requestBody, err := proto.Marshal(request)
 	if err != nil {
 		return JobResult{Err: err}
 	}
@@ -196,7 +220,12 @@ func (i *Instance) reportJob(ctx context.Context, centerPeer uint32) JobResult {
 }
 
 func (i *Instance) callMethod(ctx context.Context, centerPeer uint32, method uint32, requestBody []byte) ([]byte, error) {
-	return i.rpcMgr.Call(ctx, centerPeer, rpcDomain, ServiceNamePeerCenter, method, requestBody)
+	return i.rpcMgr.CallDescriptor(ctx, centerPeer, &rpc.RpcDescriptor{
+		DomainName:  i.domain,
+		ProtoName:   PeerCenterProtoName,
+		ServiceName: ServiceNamePeerCenter,
+		MethodIndex: method,
+	}, requestBody)
 }
 
 // serveFromCenter refreshes the local view from the local server store when
@@ -223,7 +252,7 @@ func (i *Instance) Start(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("peer center start context is nil")
 	}
-	if err := i.rpcMgr.Register(rpcDomain, i.RpcService()); err != nil {
+	if err := i.rpcMgr.Register(i.domain, i.RpcService()); err != nil {
 		return fmt.Errorf("register peer center rpc service: %w", err)
 	}
 
@@ -243,7 +272,7 @@ func (i *Instance) Stop() {
 	if i.reportRunner != nil {
 		i.reportRunner.Stop()
 	}
-	i.rpcMgr.Unregister(rpcDomain, ServiceNamePeerCenter)
+	i.rpcMgr.Unregister(i.domain, ServiceNamePeerCenter)
 }
 
 // Context returns the instance lifecycle context.
@@ -261,22 +290,32 @@ func samePeerSet(a, b map[uint32]struct{}) bool {
 	return true
 }
 
-func peerMapFromResponse(response getGlobalPeerMapResponse) map[uint32]GlobalPeerMapEntry {
-	result := make(map[uint32]GlobalPeerMapEntry, len(response.GlobalPeerMap))
-	for srcPeerID, group := range response.GlobalPeerMap {
-		peers := make(map[uint32]DirectPeerInfo, len(group))
-		for dstPeerID, info := range group {
-			peers[dstPeerID] = info
+// peerInfoForGlobalMapProto converts direct-peer latency snapshots into the
+// reference PeerInfoForGlobalMap message.
+func peerInfoForGlobalMapProto(peers map[uint32]DirectPeerInfo) *peerrpc.PeerInfoForGlobalMap {
+	if len(peers) == 0 {
+		return nil
+	}
+	direct := make(map[uint32]*peerrpc.DirectConnectedPeerInfo, len(peers))
+	for peerID, info := range peers {
+		direct[peerID] = &peerrpc.DirectConnectedPeerInfo{LatencyMs: info.LatencyMS}
+	}
+	return &peerrpc.PeerInfoForGlobalMap{DirectPeers: direct}
+}
+
+// globalPeerMapFromProto converts a reference GetGlobalPeerMapResponse into
+// the instance's per-source global map snapshot.
+func globalPeerMapFromProto(response *peerrpc.GetGlobalPeerMapResponse) map[uint32]GlobalPeerMapEntry {
+	result := make(map[uint32]GlobalPeerMapEntry, len(response.GetGlobalPeerMap()))
+	for srcPeerID, group := range response.GetGlobalPeerMap() {
+		peers := make(map[uint32]DirectPeerInfo, len(group.GetDirectPeers()))
+		for dstPeerID, info := range group.GetDirectPeers() {
+			peers[dstPeerID] = DirectPeerInfo{LatencyMS: info.GetLatencyMs()}
 		}
 		result[srcPeerID] = GlobalPeerMapEntry{DirectPeers: peers}
 	}
 	return result
 }
-
-// rpcDomain is the scoping domain used for the peer-center RPC service. Both
-// the center client and the center server register and call under this domain
-// so descriptors always match.
-const rpcDomain = "peer_center"
 
 // centerRpcService implements rpc.RpcService for the peer-center protocol.
 type centerRpcService struct {
@@ -287,23 +326,27 @@ func (s *centerRpcService) ServiceName() string { return ServiceNamePeerCenter }
 
 func (s *centerRpcService) HandleMethod(methodIndex uint32, ctx context.Context, fromPeerID uint32, requestBody []byte) ([]byte, error) {
 	switch methodIndex {
-	case MethodGetGlobalPeerMap:
-		var request getGlobalPeerMapRequest
-		if err := json.Unmarshal(requestBody, &request); err != nil {
-			return nil, fmt.Errorf("decode get_global_peer_map request: %w", err)
-		}
-		return s.handleGetGlobalPeerMap(request.Digest)
 	case MethodReportPeers:
-		var request reportPeersRequest
-		if err := json.Unmarshal(requestBody, &request); err != nil {
+		request := &peerrpc.ReportPeersRequest{}
+		if err := proto.Unmarshal(requestBody, request); err != nil {
 			return nil, fmt.Errorf("decode report_peers request: %w", err)
 		}
-		if request.MyPeerID == 0 {
+		if request.GetMyPeerId() == 0 {
 			return nil, fmt.Errorf("report_peers request is missing my_peer_id")
 		}
-		s.instance.server.ReportPeers(request.MyPeerID, request.Peers)
+		peers := make(map[uint32]DirectPeerInfo, len(request.GetPeerInfos().GetDirectPeers()))
+		for peerID, info := range request.GetPeerInfos().GetDirectPeers() {
+			peers[peerID] = DirectPeerInfo{LatencyMS: info.GetLatencyMs()}
+		}
+		s.instance.server.ReportPeers(request.GetMyPeerId(), peers)
 		_ = fromPeerID
-		return []byte(`{}`), nil
+		return proto.Marshal(&peerrpc.ReportPeersResponse{})
+	case MethodGetGlobalPeerMap:
+		request := &peerrpc.GetGlobalPeerMapRequest{}
+		if err := proto.Unmarshal(requestBody, request); err != nil {
+			return nil, fmt.Errorf("decode get_global_peer_map request: %w", err)
+		}
+		return s.handleGetGlobalPeerMap(Digest(request.GetDigest()))
 	default:
 		return nil, fmt.Errorf("unknown peer center rpc method %d", methodIndex)
 	}
@@ -311,40 +354,23 @@ func (s *centerRpcService) HandleMethod(methodIndex uint32, ctx context.Context,
 
 func (s *centerRpcService) handleGetGlobalPeerMap(requestDigest Digest) ([]byte, error) {
 	globalMap, serverDigest, noUpdate := s.instance.server.GetGlobalPeerMap(requestDigest)
-	response := getGlobalPeerMapResponse{
-		Digest: serverDigest,
-	}
-	if noUpdate {
-		response.NoUpdate = true
-	} else {
-		response.GlobalPeerMap = make(map[uint32]map[uint32]DirectPeerInfo, len(globalMap))
+	response := &peerrpc.GetGlobalPeerMapResponse{}
+	digest := uint64(serverDigest)
+	response.Digest = &digest
+	if !noUpdate {
+		response.GlobalPeerMap = make(map[uint32]*peerrpc.PeerInfoForGlobalMap, len(globalMap))
 		for pair, info := range globalMap {
 			group, ok := response.GlobalPeerMap[pair.Source]
 			if !ok {
-				group = make(map[uint32]DirectPeerInfo)
+				group = &peerrpc.PeerInfoForGlobalMap{DirectPeers: make(map[uint32]*peerrpc.DirectConnectedPeerInfo)}
 				response.GlobalPeerMap[pair.Source] = group
 			}
-			group[pair.Dest] = info
+			group.DirectPeers[pair.Dest] = &peerrpc.DirectConnectedPeerInfo{LatencyMs: info.LatencyMS}
 		}
 	}
-	body, err := json.Marshal(response)
+	body, err := proto.Marshal(response)
 	if err != nil {
 		return nil, fmt.Errorf("encode get_global_peer_map response: %w", err)
 	}
 	return body, nil
-}
-
-type getGlobalPeerMapRequest struct {
-	Digest Digest `json:"digest"`
-}
-
-type reportPeersRequest struct {
-	MyPeerID uint32                    `json:"my_peer_id"`
-	Peers    map[uint32]DirectPeerInfo `json:"peers"`
-}
-
-type getGlobalPeerMapResponse struct {
-	GlobalPeerMap map[uint32]map[uint32]DirectPeerInfo `json:"global_peer_map,omitempty"`
-	Digest        Digest                               `json:"digest"`
-	NoUpdate      bool                                 `json:"no_update"`
 }
