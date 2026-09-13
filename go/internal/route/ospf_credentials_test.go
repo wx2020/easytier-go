@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
