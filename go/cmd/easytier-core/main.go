@@ -466,16 +466,49 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 			DataCompressAlgo: algorithm,
 			LegacyCipher:     legacyCipher,
 		},
-		NoTUN:            noTun,
-		EnableEncryption: enableEncryption,
-		DHCP:             cfg.DHCP,
-		IPv4:             cfg.IPv4,
-		IPv6:             cfg.IPv6,
-		TUN:              tunDevice,
-		TUNMTU:           tunMTU,
-		TUNDestination:   tunDestination,
+		PeerCenterNetworkName: cfg.NetworkIdentity.NetworkName,
+		NoTUN:                 noTun,
+		EnableEncryption:      enableEncryption,
+		DHCP:                  cfg.DHCP,
+		IPv4:                  cfg.IPv4,
+		IPv6:                  cfg.IPv6,
+		TUN:                   tunDevice,
+		TUNMTU:                tunMTU,
+		TUNDestination:        tunDestination,
+	}
+	if cfg.NetworkIdentity.NetworkName != "" {
+		opts.P2P = p2pConfigFrom(cfg)
 	}
 	return core.ListenWithOptions(opts)
+}
+
+// p2pConfigFrom derives the NAT traversal configuration from the instance
+// config: STUN detection, hole punching, the direct connector, and manual
+// connectors for the configured peers.
+func p2pConfigFrom(cfg config.Config) *core.P2PConfig {
+	p2p := &core.P2PConfig{
+		NetworkName:      cfg.NetworkIdentity.NetworkName,
+		ManualConnectors: make([]string, 0, len(cfg.Peers)),
+	}
+	for _, configured := range cfg.Peers {
+		p2p.ManualConnectors = append(p2p.ManualConnectors, configured.URI)
+	}
+	p2p.ExtraListeners = append(p2p.ExtraListeners, cfg.MappedListeners...)
+	if cfg.Flags != nil {
+		flags := cfg.Flags
+		p2p.DisableP2P = flags.DisableP2P
+		p2p.NeedP2P = flags.NeedP2P
+		p2p.LazyP2P = flags.LazyP2P
+		p2p.DisableUDPHolePunching = flags.DisableUDPHolePunching
+		p2p.DisableTCPHolePunching = flags.DisableTCPHolePunching
+		p2p.DisableSymHolePunching = flags.DisableSymHolePunching
+		p2p.DisableUPnP = flags.DisableUPnP
+		p2p.EnableIPv6 = flags.EnableIPv6
+		if flags.DefaultProtocol != "" {
+			p2p.DefaultProtocol = flags.DefaultProtocol
+		}
+	}
+	return p2p
 }
 
 type configuredInstance struct {

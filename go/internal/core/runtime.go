@@ -72,6 +72,10 @@ type NodeOptions struct {
 	// jobs when non-empty. The RPC service is scoped to this network name.
 	PeerCenterNetworkName string
 
+	// P2P enables the NAT traversal stack (STUN, hole punching, direct and
+	// manual connectors) when non-nil.
+	P2P *P2PConfig
+
 	TUN              tun.Device
 	TUNMTU           int
 	TUNDestination   uint32
@@ -243,6 +247,13 @@ func ListenWithOptions(options NodeOptions) (*Node, error) {
 			return nil, fmt.Errorf("%w: %d", tun.ErrInvalidMTU, options.TUNMTU)
 		}
 	}
+	// Advertise the node's own listeners for direct-connector discovery.
+	if options.P2P != nil {
+		options.P2P.ExtraListeners = append(options.P2P.ExtraListeners, "tcp://"+listener.Addr().String())
+		if udpService != nil {
+			options.P2P.ExtraListeners = append(options.P2P.ExtraListeners, "udp://"+udpService.Address().String())
+		}
+	}
 	return &Node{
 		listener:    listener,
 		maxFrame:    options.MaxFrame,
@@ -256,6 +267,8 @@ func ListenWithOptions(options NodeOptions) (*Node, error) {
 			routeEngine:      options.RouteEngine,
 			routeRefresh:     options.RouteRefresh,
 			centerDomain:     options.PeerCenterNetworkName,
+			p2pConfig:        options.P2P,
+			p2pDomain:        options.PeerCenterNetworkName,
 			packetHandler:    options.PacketHandler,
 			rpcHandler:       options.RPCHandler,
 			rpcServer:        options.RPCServer,
@@ -305,6 +318,12 @@ type nodeRuntime struct {
 	peerRPC      *rpc.PeerRpcManager
 	center       *peercenter.Instance
 	centerDomain string
+
+	// p2pConfig and p2p carry the NAT traversal stack. p2pDomain scopes its
+	// peer RPC services; p2p is published by the serve goroutine.
+	p2pConfig *P2PConfig
+	p2pDomain string
+	p2p       *p2pRuntime
 
 	portal PortalForwarder
 
@@ -443,6 +462,9 @@ func (n *Node) serveManaged(ctx context.Context) error {
 		return err
 	}
 	if err := r.initICMPProxy(); err != nil {
+		return err
+	}
+	if err := r.initP2P(auxCtx); err != nil {
 		return err
 	}
 	// The packet channel must exist before the RA announcer starts: its
@@ -653,7 +675,10 @@ func dialPeer(ctx context.Context, endpoint config.Endpoint, maxFrame int) (peer
 	if endpoint.Protocol == config.ProtocolWS || endpoint.Protocol == config.ProtocolWSS {
 		address = endpoint.String()
 	}
-	return transport.DialPacketChannel(ctx, string(endpoint.Protocol), address, maxFrame)
+	// The endpoint URL path carries the bind device (wg://host:port/eth0),
+	// mirroring TunnelUrl::bind_dev in the Rust oracle.
+	return transport.DialPacketChannel(ctx, string(endpoint.Protocol), address, maxFrame,
+		transport.BindDevice(strings.TrimPrefix(endpoint.Path, "/")))
 }
 
 func waitReconnect(ctx context.Context, delay time.Duration) bool {
@@ -1376,6 +1401,7 @@ func (r *nodeRuntime) close() error {
 		if icmpProxy != nil {
 			icmpProxy.Stop()
 		}
+		r.stopP2P()
 		if raCancel != nil {
 			raCancel()
 		}

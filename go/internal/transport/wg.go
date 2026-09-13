@@ -73,6 +73,9 @@ type WGSession struct {
 	timers   wgSessionTimers
 	lastRecv atomic.Int64
 	lastSend atomic.Int64
+	// surfaced flips once the session has been announced on the accept
+	// channel, so repeated surface attempts are idempotent.
+	surfaced atomic.Bool
 	// handshaked flips once a handshake completes so the initiator stops
 	// re-initiating until the session reaches REKEY_AFTER_TIME.
 	handshaked atomic.Bool
@@ -90,19 +93,26 @@ type WGSession struct {
 	hsCfg *WgCryptoConfig
 }
 
-// ListenWG binds an EasyTier WG tunnel listener.
-func ListenWG(address string) (*WGService, error) {
-	return ListenWGWithCrypto(address, nil)
+// ListenWG binds an EasyTier WG tunnel listener. Optional BindDevice pins
+// the socket to a network interface.
+func ListenWG(address string, opts ...BindOption) (*WGService, error) {
+	return ListenWGWithCrypto(address, nil, opts...)
 }
 
 // ListenWGWithCrypto binds a WG listener whose sessions encrypt with cfg.
-// A nil cfg keeps the plaintext framing for compatibility.
-func ListenWGWithCrypto(address string, cfg *WgCryptoConfig) (*WGService, error) {
+// A nil cfg keeps the plaintext framing for compatibility. Optional
+// BindDevice pins the socket to a network interface.
+func ListenWGWithCrypto(address string, cfg *WgCryptoConfig, opts ...BindOption) (*WGService, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, fmt.Errorf("resolve WG listen address %q: %w", address, err)
 	}
-	socket, err := net.ListenUDP("udp", addr)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(addr)
+	}
+	socket, err := listenUDPWithBind(network, addr, dev)
 	if err != nil {
 		return nil, fmt.Errorf("listen WG on %q: %w", address, err)
 	}
@@ -241,6 +251,9 @@ func (s *WGService) handleHsInit(remote *net.UDPAddr, body []byte) {
 	}
 	session.markRecv()
 	session.crypto.AdoptSessionKey(keys.SessionKey)
+	// The session may pre-exist unsurfaced when its first data datagram
+	// authenticated before the handshake arrived; surface it now either way.
+	s.surfaceSession(remote.String(), session)
 	header := protocol.MarshalWGTunnelHeader(len(respDatagram) + 1)
 	out := make([]byte, 0, len(header)+len(respDatagram)+1)
 	out = append(out, header...)
@@ -289,13 +302,18 @@ func (s *WGService) sessionForRemote(remote *net.UDPAddr, surface bool) (*WGSess
 	return session, true
 }
 
-// surfaceSession announces an authenticated session on the accept channel.
-// When nobody can take it, the session is shut down and forgotten.
+// surfaceSession announces an authenticated session on the accept channel at
+// most once per session. When nobody can take it, the session is shut down
+// and forgotten.
 func (s *WGService) surfaceSession(key string, session *WGSession) bool {
+	if !session.surfaced.CompareAndSwap(false, true) {
+		return true
+	}
 	select {
 	case s.accept <- session:
 		return true
 	default:
+		session.surfaced.Store(false)
 		session.shutdown()
 		s.mu.Lock()
 		delete(s.sessions, key)
@@ -372,8 +390,8 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 	}
 	// Crypto-enabled mode authenticates at openDatagram: the session is
 	// created up front (its static epoch-0 key mirrors the peer) but only
-	// surfaced after the first datagram authenticates, so wrong-secret
-	// remotes never appear on Accept and leave no retained state.
+	// surfaced after a datagram authenticates, so wrong-secret remotes
+	// never appear on Accept and leave no retained state.
 	session, created := s.sessionForRemote(remote, false)
 	if session == nil {
 		return
@@ -389,7 +407,9 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 		}
 		return
 	}
-	if created && !s.surfaceSession(remote.String(), session) {
+	// surfaceSession is idempotent: an existing unsurfaced session (its
+	// earlier datagrams failed authentication) is surfaced by this one.
+	if !s.surfaceSession(remote.String(), session) {
 		return
 	}
 	// Deliver first.
@@ -398,14 +418,15 @@ func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
 
 // DialWG establishes a WG tunnel session to address.
 // It creates a client UDP socket and returns a session that wraps packets
-// with the synthetic IPv4 header.
-func DialWG(ctx context.Context, address string) (*WGSession, error) {
-	return DialWGWithCrypto(ctx, address, nil)
+// with the synthetic IPv4 header. Optional BindDevice pins the socket to a
+// network interface.
+func DialWG(ctx context.Context, address string, opts ...BindOption) (*WGSession, error) {
+	return DialWGWithCrypto(ctx, address, nil, opts...)
 }
 
 // DialWGWithCrypto dials like DialWG but encrypts the session with cfg.
 // A nil cfg keeps the plaintext framing for compatibility.
-func DialWGWithCrypto(ctx context.Context, address string, cfg *WgCryptoConfig) (*WGSession, error) {
+func DialWGWithCrypto(ctx context.Context, address string, cfg *WgCryptoConfig, opts ...BindOption) (*WGSession, error) {
 	if ctx == nil {
 		return nil, errors.New("WG dial context is nil")
 	}
@@ -417,7 +438,12 @@ func DialWGWithCrypto(ctx context.Context, address string, cfg *WgCryptoConfig) 
 	if remote.IP.To4() != nil {
 		local = &net.UDPAddr{IP: net.IPv4zero}
 	}
-	socket, err := net.ListenUDP("udp", local)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(local)
+	}
+	socket, err := listenUDPWithBind(network, local, dev)
 	if err != nil {
 		return nil, fmt.Errorf("bind WG client socket: %w", err)
 	}

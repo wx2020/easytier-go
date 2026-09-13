@@ -67,14 +67,51 @@ type UDPSession struct {
 	onClose   func()
 }
 
+// listenUDPWithBind creates a UDP socket, optionally pinned to a device
+// through the ListenConfig Control hook (the Control callback only runs on
+// ListenConfig-created sockets).
+func listenUDPWithBind(network string, addr *net.UDPAddr, dev string) (*net.UDPConn, error) {
+	if dev == "" {
+		return net.ListenUDP(network, addr)
+	}
+	config := net.ListenConfig{Control: bindDeviceControl(dev)}
+	pc, err := config.ListenPacket(context.Background(), network, addr.String())
+	if err != nil {
+		return nil, err
+	}
+	conn, ok := pc.(*net.UDPConn)
+	if !ok {
+		_ = pc.Close()
+		return nil, fmt.Errorf("bind UDP socket to device %q: not a UDP conn", dev)
+	}
+	return conn, nil
+}
+
+// udpNetworkForAddr selects udp4/udp6 so the bind-to-device Control hook
+// can pick the matching socket option level.
+func udpNetworkForAddr(addr *net.UDPAddr) string {
+	if addr != nil && addr.IP != nil && addr.IP.To4() == nil {
+		return "udp6"
+	}
+	return "udp4"
+}
+
 // ListenUDP binds an EasyTier UDP tunnel listener. Call Serve to process
-// datagrams and Accept to obtain newly handshaken sessions.
-func ListenUDP(address string) (*UDPService, error) {
+// datagrams and Accept to obtain newly handshaken sessions. Optional
+// BindDevice pins the socket to a network interface.
+func ListenUDP(address string, opts ...BindOption) (*UDPService, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, fmt.Errorf("resolve UDP listen address %q: %w", address, err)
 	}
-	socket, err := net.ListenUDP("udp", addr)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		// Only the bind-to-device path needs an explicit family so the
+		// Control hook can pick the matching socket option level.
+		network = udpNetworkForAddr(addr)
+	}
+	socket, err := listenUDPWithBind(network, addr, dev)
 	if err != nil {
 		return nil, fmt.Errorf("listen UDP on %q: %w", address, err)
 	}
@@ -331,8 +368,9 @@ func (s *UDPService) expirePendingSession(key udpSessionKey, session *UDPSession
 }
 
 // DialUDP establishes a UDP tunnel by sending SYN and verifying the matching
-// SACK from address. The context bounds the entire handshake.
-func DialUDP(ctx context.Context, address string) (*UDPSession, error) {
+// SACK from address. The context bounds the entire handshake. Optional
+// BindDevice pins the socket to a network interface.
+func DialUDP(ctx context.Context, address string, opts ...BindOption) (*UDPSession, error) {
 	if ctx == nil {
 		return nil, errors.New("UDP dial context is nil")
 	}
@@ -344,7 +382,12 @@ func DialUDP(ctx context.Context, address string) (*UDPSession, error) {
 	if remote.IP.To4() != nil {
 		local = &net.UDPAddr{IP: net.IPv4zero}
 	}
-	socket, err := net.ListenUDP("udp", local)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(local)
+	}
+	socket, err := listenUDPWithBind(network, local, dev)
 	if err != nil {
 		return nil, fmt.Errorf("bind UDP client socket: %w", err)
 	}

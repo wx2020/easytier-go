@@ -27,29 +27,43 @@ type PacketChannel interface {
 }
 
 // DialPacketChannel selects a transport without making callers duplicate the
-// transport-specific handshake and framing choices.
-func DialPacketChannel(ctx context.Context, scheme, address string, maxFrame int) (PacketChannel, error) {
+// transport-specific handshake and framing choices. Optional BindDevice pins
+// the underlying sockets to a network interface ("auto" resolves the device
+// from the address).
+func DialPacketChannel(ctx context.Context, scheme, address string, maxFrame int, opts ...BindOption) (PacketChannel, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("packet channel context is nil")
 	}
 	switch strings.ToLower(scheme) {
 	case "tcp":
-		return DialTCP(ctx, address, maxFrame)
+		return DialTCP(ctx, address, maxFrame, opts...)
 	case "udp":
-		return DialUDP(ctx, address)
+		return DialUDP(ctx, address, opts...)
 	case "ws", "wss":
-		return DialWebSocket(ctx, address)
+		return DialWebSocket(ctx, address, bindOptionToWebSocketOptions(opts))
 	case "unix":
 		return DialUnix(ctx, address, maxFrame)
 	case "wg":
-		return DialWG(ctx, address)
+		return DialWG(ctx, address, opts...)
 	case "quic":
-		return DialQUIC(ctx, address)
+		return DialQUIC(ctx, address, opts...)
 	case "faketcp", "fake-tcp":
-		return DialFakeTCP(ctx, address, maxFrame)
+		return DialFakeTCP(ctx, address, maxFrame, opts...)
+	case "ring":
+		return DialRing(ctx, address)
 	default:
 		return nil, fmt.Errorf("unsupported packet channel transport %q", scheme)
 	}
+}
+
+// bindOptionToWebSocketOptions maps the shared bind option onto the
+// websocket-specific options struct.
+func bindOptionToWebSocketOptions(opts []BindOption) WebSocketOptions {
+	_, dev := resolveBindOption("", opts)
+	if dev == "" {
+		return WebSocketOptions{}
+	}
+	return WebSocketOptions{BindDevice: dev}
 }
 
 // ListenPacketChannel creates a listener for the given transport scheme.
@@ -60,11 +74,18 @@ func ListenPacketChannel(scheme, address string) (PacketListener, error) {
 }
 
 // ListenPacketChannelWithContext creates a listener using the provided context
-// for background serving of datagram transports.
-func ListenPacketChannelWithContext(ctx context.Context, scheme, address string, maxFrame int) (PacketListener, error) {
+// for background serving of datagram transports. Optional BindDevice pins the
+// listening sockets to a network interface ("auto" resolves the device from
+// the address).
+func ListenPacketChannelWithContext(ctx context.Context, scheme, address string, maxFrame int, opts ...BindOption) (PacketListener, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	switch strings.ToLower(scheme) {
 	case "tcp":
-		ln, err := net.Listen("tcp", address)
+		_, dev := resolveBindOption(address, opts)
+		listenConfig := net.ListenConfig{Control: bindDeviceControl(dev)}
+		ln, err := listenConfig.Listen(ctx, "tcp", address)
 		if err != nil {
 			return nil, err
 		}
@@ -73,52 +94,37 @@ func ListenPacketChannelWithContext(ctx context.Context, scheme, address string,
 		}
 		return &tcpPacketListener{listener: ln, maxFrame: maxFrame, done: make(chan struct{})}, nil
 	case "udp":
-		svc, err := ListenUDP(address)
+		svc, err := ListenUDP(address, opts...)
 		if err != nil {
 			return nil, err
-		}
-		if ctx == nil {
-			ctx = context.Background()
 		}
 		go func() { _ = svc.Serve(ctx) }()
 		return &udpPacketListener{service: svc}, nil
 	case "wg":
-		svc, err := ListenWG(address)
+		svc, err := ListenWG(address, opts...)
 		if err != nil {
 			return nil, err
-		}
-		if ctx == nil {
-			ctx = context.Background()
 		}
 		go func() { _ = svc.Serve(ctx) }()
 		return &wgPacketListener{service: svc}, nil
 	case "quic":
-		svc, err := ListenQUIC(address)
+		svc, err := ListenQUIC(address, opts...)
 		if err != nil {
 			return nil, err
-		}
-		if ctx == nil {
-			ctx = context.Background()
 		}
 		go func() { _ = svc.Serve(ctx) }()
 		return &quicPacketListener{service: svc}, nil
 	case "faketcp", "fake-tcp":
-		svc, err := ListenFakeTCP(address, maxFrame)
+		svc, err := ListenFakeTCP(address, maxFrame, opts...)
 		if err != nil {
 			return nil, err
-		}
-		if ctx == nil {
-			ctx = context.Background()
 		}
 		go func() { _ = svc.Serve(ctx) }()
 		return &fakeTCPListener{service: svc}, nil
 	case "ws", "wss":
-		ln, err := ListenWebSocket(address)
+		ln, err := ListenWebSocket(address, bindOptionToWebSocketOptions(opts))
 		if err != nil {
 			return nil, err
-		}
-		if ctx == nil {
-			ctx = context.Background()
 		}
 		go func() {
 			if strings.EqualFold(scheme, "wss") {
@@ -130,6 +136,12 @@ func ListenPacketChannelWithContext(ctx context.Context, scheme, address string,
 			_ = ln.Serve(ctx)
 		}()
 		return &wsPacketListener{listener: ln}, nil
+	case "ring":
+		ln, err := ListenRing(address)
+		if err != nil {
+			return nil, err
+		}
+		return &ringPacketListener{listener: ln}, nil
 	case "unix":
 		if maxFrame == 0 {
 			maxFrame = protocol.DefaultMaxStreamFrameSize
@@ -225,3 +237,11 @@ func (l *fakeTCPListener) Accept(ctx context.Context) (PacketChannel, error) {
 }
 func (l *fakeTCPListener) Close() error      { return l.service.Close() }
 func (l *fakeTCPListener) Address() net.Addr { return l.service.Address() }
+
+type ringPacketListener struct{ listener *ringListener }
+
+func (l *ringPacketListener) Accept(ctx context.Context) (PacketChannel, error) {
+	return l.listener.Accept(ctx)
+}
+func (l *ringPacketListener) Close() error      { return l.listener.Close() }
+func (l *ringPacketListener) Address() net.Addr { return l.listener.Address() }

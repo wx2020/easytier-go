@@ -284,3 +284,46 @@ For the full policy, see `docs/CLEAN_ROOM.md`.
 ### 11.2 Release and supply-chain policy (FND-05)
 
 Releases follow `docs/RELEASE.md`: semantic versioning tracks Rust `2.6.4` (e.g., `v2.6.4`, Go ldflags `-X main.version`), artifact naming is defined per target matrix (§5), builds are reproducible (`-trimpath`, `CGO_ENABLED=0`, `SOURCE_DATE_EPOCH`), and every artifact ships with a Syft-generated SBOM (`sbom.spdx.json`), `SHA256SUMS`, a cosign/GPG signature (`*.sig`/`*.pem`), and SLSA provenance. The workflow `.github/workflows/go-release.yml` implements this pipeline; see `docs/RELEASE.md` and `script/reproducible-build.sh`.
+
+### 11.3 P3 transport completion records (NET-06, NET-08, VAL-02)
+
+Records for the P3 (transport completion) work. All changes preserve the
+wire formats and golden fixtures; each notes the deliberate behavioral
+choice relative to the Rust oracle.
+
+* **WG session timers (NET-06).** The Go `wg://` tunnel adds a per-session
+  routine task mirroring the boringtun timers used by the oracle:
+  REKEY_AFTER_TIME 120 s, REJECT_AFTER_TIME 180 s (keys refused on both the
+  send and receive path), REKEY_TIMEOUT 5 s between handshake retries,
+  REKEY_ATTEMPT_TIME 90 s after which the session is abandoned, and
+  KEEPALIVE_TIMEOUT 10 s with a native keepalive body kind
+  (`magic + kind=3`; sealed data always starts with AEAD type 4, so the
+  kind space 1..3 is reserved). Handshakes are serialized per session so
+  both sides adopt rotated keys in the same order. Compatibility impact:
+  none on the wire; sessions now rekey instead of using static-key epochs
+  indefinitely. Dial still returns before the handshake completes
+  (documented in `wg_crypto.go`), unlike the oracle's blocking connect.
+* **Bind-to-device opt-in (NET-08 adjacent).** The oracle resolves the
+  bind device automatically (`BindDev::Auto`) whenever a listener binds a
+  specific address; on Linux that requires CAP_NET_RAW (SO_BINDTODEVICE)
+  and fails unprivileged listeners. The Go transport implements the same
+  socket options (Linux SO_BINDTODEVICE, macOS IP_BOUND_IF/IPV6_BOUND_IF,
+  Windows IP_UNICAST_IF/IPV6_UNICAST_IF) but keeps binding **opt-in** via
+  `transport.BindDevice(...)` / the endpoint URL path (`wg://host:port/eth0`
+  → device `eth0`, mirroring `TunnelUrl::bind_dev`). Default remains
+  unbound so unprivileged operation keeps working. Migration: deployments
+  needing interface pinning set the URL path device.
+* **fake_tcp capture backends (NET-08).** Windows uses WinDivert 2.2 via
+  runtime `WinDivert.dll` loading (SNIFF-mode reader + "false"-filter
+  injection sender, as in `netfilter/windivert.rs`); the driver/DLL ships
+  separately, and the TCP emulation fallback applies when it is absent.
+  macOS uses `/dev/bpf*` in immediate mode (immediate/see-sent/HDRCMPLT/
+  200 ms read timeout, Ethernet/Null/Loop/Raw datalinks). Packet selection
+  uses the shared userspace filter (`faketcp_capture_filter.go`) instead
+  of a kernel BPF program on macOS; the selected packet set is identical.
+  Kernel filter compilation remains future work if capture CPU becomes a
+  concern.
+* **ring:// tunnel.** In-memory ring tunnel registered under the `ring://`
+  scheme (`ListenRing`/`DialRing` plus `CreateRingTunnelPair`), mirroring
+  `tunnel/ring.rs` semantics (two unidirectional bounded queues of 128,
+  registry-driven connect). Test convenience; no wire impact.

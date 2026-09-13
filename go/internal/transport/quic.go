@@ -56,13 +56,19 @@ type QUICSession struct {
 	onClose   func()
 }
 
-// ListenQUIC binds an EasyTier QUIC tunnel listener.
-func ListenQUIC(address string) (*QUICService, error) {
+// ListenQUIC binds an EasyTier QUIC tunnel listener. Optional BindDevice
+// pins the socket to a network interface.
+func ListenQUIC(address string, opts ...BindOption) (*QUICService, error) {
 	addr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		return nil, fmt.Errorf("resolve QUIC listen address %q: %w", address, err)
 	}
-	socket, err := net.ListenUDP("udp", addr)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(addr)
+	}
+	socket, err := listenUDPWithBind(network, addr, dev)
 	if err != nil {
 		return nil, fmt.Errorf("listen QUIC on %q: %w", address, err)
 	}
@@ -273,7 +279,8 @@ func (s *QUICService) expirePendingSession(key quicSessionKey, session *QUICSess
 }
 
 // DialQUIC establishes a QUIC tunnel by sending SYN and verifying the matching SACK.
-func DialQUIC(ctx context.Context, address string) (*QUICSession, error) {
+// Optional BindDevice pins the socket to a network interface.
+func DialQUIC(ctx context.Context, address string, opts ...BindOption) (*QUICSession, error) {
 	if ctx == nil {
 		return nil, errors.New("QUIC dial context is nil")
 	}
@@ -285,7 +292,12 @@ func DialQUIC(ctx context.Context, address string) (*QUICSession, error) {
 	if remote.IP.To4() != nil {
 		local = &net.UDPAddr{IP: net.IPv4zero}
 	}
-	socket, err := net.ListenUDP("udp", local)
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(local)
+	}
+	socket, err := listenUDPWithBind(network, local, dev)
 	if err != nil {
 		return nil, fmt.Errorf("bind QUIC client socket: %w", err)
 	}

@@ -81,6 +81,52 @@
       越界校验、服务身份/方法索引钉死（防回归）。
     - 剩余：与 Rust oracle 的路由互通单元验证；会话语义（dst_session_id
       跟踪、重复 peer 检测、凭证证明）仍待后续项。
+12. **UDP 打洞与直连全栈（P2 项）**：对照 `common/stun.rs`、`udp_hole_punch/`、
+    `direct.rs`、`tcp_hole_punch.rs`、`manual.rs` 行为规范补齐整条 NAT 穿越栈——
+    - **STUN 行为探测**：`internal/stun/detect.go` 实现 RFC5389/5780 线格式
+      （Binding + CHANGE-REQUEST，XOR-MAPPED/MAPPED/OTHER/CHANGED 属性编解码）、
+      每服务器三探测（无变化/换端口/换 IP+端口）并发探测、分类算法
+      （Open/NoPAT/FullCone/Restricted/PortRestricted/Symmetric/EasyInc/EasyDec，
+      含 easy-sym 的 extra-bind 端口增量判定）与 TCP 侧分类；`collector.go`
+      提供后台探测循环（600s 成功/10s 重试节奏）、`GetStunInfo`（生成
+      `common.StunInfo`）、UDP/TCP 端口映射查询与 `txt:` 服务器发现，默认
+      服务器列表与参考一致。
+    - **打洞原语**：`internal/punch` 新包——16 字节体打洞包构造/解析、
+      `UdpSocketArray`（84/25/1 规格的端口阵列，按事务 ID 捕获已打通套接字、
+      SendWithAll×3）、`ListenerPool`（≤4 公共监听器、UPnP 优先+STUN 解析
+      mapped addr、40s/30s 保留清扫）、`UdpHolePunchRpc` 服务（protojson 编码
+      生成类型，`SelectPunchListener`/`Cone`/`HardSym`/`EasySym`/`BothEasySym`
+      五方法，sym 互斥锁 + both-easy-sym 单飞）、三客户端（cone、
+      sym-to-cone 预测+随机、both-easy-sym 带忙回滚）与协调器（5s 循环、
+      策略决策表驱动、[1000..16000] 退避梯、InvalidServiceKey 黑名单 3600s）。
+    - **套接字升级为 peer 会话**：`transport` 新增 `AdoptUDP`（采纳预绑定
+      socket 为监听服务）、`DialUDPWithSocket`（复用已打通 socket 走 SYN/SACK，
+      打洞会话按 connID 接受 NAT 重写来源）、V4/V6HolePunch 回环控制包响应；
+      打通会话经 `PeerConnectionManager.Connect/Accept` 完成认证握手并校验
+      对端 peer ID，TCP 打洞（`tcphole` 服务化 `TcpHolePunchRpc.ExchangeMappedAddr`
+      + 发起端同时连接/回退监听）经 `NewTCPPacketChannel` 同样接入。
+    - **直连连接器**：`internal/directconn` 新包——`DirectConnectorRpc` 服务
+      （`GetIpList` 返回接口/公网 IP + 监听列表、`SendUdpHolePunchPacket` 经
+      回环控制包驱动本机监听器发打洞辅助包）、直连循环（候选=路由表+OSPF+
+      GlobalPeerMap 去直连，GetIpList→监听器展开（未指定主机×接口/公网 IP、
+      default>udp>其他优先级、回环/自身过滤）→UDP 公网走打洞辅助+带 socket
+      拨号、其余直接拨号，[1000,2000,4000] 抖动退避后 (peer,url) 黑名单 300s）、
+      `ManualConnectorManager`（add/remove/clear/list、1s 重连节奏、2s/20s 按
+      scheme 的拨号预算、Connected/Connecting/Disconnected 状态）。
+    - **runtime 接入**：`core.P2PConfig`（flags 映射：disable_p2p/need_p2p/
+      lazy_p2p/disable_udp|tcp|sym_hole_punching/disable_upnp/enable_ipv6/
+      default_protocol）→ `nodeRuntime.initP2P` 启动 STUN 收集器、注册三个
+      peer RPC 服务、启动打洞协调器/直连循环/TCP 打洞驱动/Manual 管理，
+      close 全量回收；`cmd/easytier-core` 从实例配置装配。
+    - **测试**：STUN 分类表+回环假 STUN 服务器（Restricted 实测、端口映射）、
+      打洞包/地址 proto 往返、socket 阵列捕获、退避/黑名单、**Go↔Go cone
+      打洞端到端**（RPC 内存管道+回环，打洞会话承载数据）、easy-sym 预测
+      端口命中、TCP 打洞端到端、直连监听器展开/自连过滤、回环控制注入、
+      Manual 生命周期（连接→断→重连→移除）。
+    - **已知差距**：对端 NAT 类型依赖 OSPF 携带 `RoutePeerInfo.udp_nat_type`，
+      Go OSPF 尚未传该字段，远端按 Unknown 回退（与参考 `stun_info` 缺失时
+      行为一致）；UPnP 映射器接口已留（`punch.PortMapper`）待 `mapping/`
+      接入；与 Rust oracle 的打洞互通待 `interop.yml` 扩展。
 
 ## 3. 逐模块完成度
 
@@ -91,12 +137,12 @@
 | 隧道 | 状态 | 说明 |
 | --- | --- | --- |
 | TCP / UDP(SYN+SACK) / WS+WSS / Unix | ✅ | 与 Rust 对应实现+测试齐备；UDP 打洞包构造在 `internal/nat` |
-| WireGuard `wg://` | 🟡 | 数据面/握手/MAC2 cookie/重放窗口齐备；**缺 boringtun 式会话到期 rekey/轮换**，仅空闲 TTL 回收 |
+| WireGuard `wg://` | ✅ | 数据面/握手/重放窗口齐备；P3 已补 **boringtun 式会话定时器**（REKEY/REJECT_AFTER_TIME、REKEY_TIMEOUT 重试、KEEPALIVE_TIMEOUT、空闲 61s 回收），见 `wg_timers.go` |
 | QUIC | 🔴 | `quic.go` 自述为“plaintext QUIC-like **for testing**”，非真 QUIC，**与 Rust quinn-plaintext 无法互通**。TODOLIST 表格标 complete、§7.7 又标 blocked，自相矛盾——按 blocked 计 |
-| fake_tcp | 🟡 | 默认路径是 TCP 仿真回退（Go-Go 专用，非线协议）；Linux AF_PACKET 原始抓包可用；**缺 Windows WinDivert、macOS BPF** |
-| ring（测试用内存隧道） | 🔴 | 无对应物（低优先级） |
-| `bind`/BindDev 绑定网卡 | 🔴 | Go 侧无 SO_BINDTODEVICE 等价物 |
-| wss 自签证书（insecure_tls.rs） | 🔴 | 无对等路径 |
+| fake_tcp | ✅ | 默认路径是 TCP 仿真回退（Go-Go 专用，非线协议）；原始抓包后端齐备：Linux AF_PACKET、**Windows WinDivert**（运行时加载 WinDivert.dll，需管理员，DLL 随部署提供）、**macOS /dev/bpf\***（需 root），见 `faketcp_capture_filter.go` 共享用户态过滤 |
+| ring（测试用内存隧道） | ✅ | `ring.go`：`ring://` 注册表监听/拨号 + `CreateRingTunnelPair`，对照 `tunnel/ring.rs` |
+| `bind`/BindDev 绑定网卡 | ✅ | `bindsock*.go`：Linux SO_BINDTODEVICE / macOS IP_BOUND_IF / Windows IP_UNICAST_IF；经端点 URL 路径设备名（`wg://host:port/eth0`）或 `transport.BindDevice` 启用；Go 默认不绑定（SE §11.3） |
+| wss 自签证书（insecure_tls.rs） | ✅ | 监听端自动生成自签证书、拨号端默认跳过验证 + IP 主机 SNI 改写 localhost（`tls_insecure.go`），`wss://` 监听工厂现真正启用 TLS |
 
 ### 3.2 对等层/路由/NAT（Rust `peers/`+`connector/` ~34k 行 → Go `peer/ route/ nat/ …` ~12k 行）
 
@@ -109,10 +155,10 @@
 | Peer RPC 骨架 | 🟡 | 域/服务/方法索引+分片+压缩可用；Rust 各 proto 服务（如 peer_direct_access）大多未注册 |
 | 中继/令牌桶/白名单 | 🟡 | `relay/` 存在；Rust foreign-network 客户端自动连接面（~2700 行）大部分缺失 |
 | Peer center | ✅❓ | 结构完整并入 runtime；但 JSON 线格式 vs Rust protobuf `PeerCenterRpc`，互通未验证 |
-| **UDP 打洞** | 🔴 | `nat/hole_punch.go` 仅原语（载荷编解码/端口预测）；cone/sym-to-cone/easy-sym/both-sym 四策略引擎与协调器无实现，`PunchHole` 等 proto 生成后**从未被引用** |
-| TCP 打洞 | 🟡 | 同时连接+回退监听有；打洞套接字未升级为已认证 peer 会话 |
-| 直连连接器（global map 驱动） | 🔴 | 无地址发现/拨号循环；connector 包未接入 `core/runtime.go` |
-| STUN/NAT 分类 | 🔴 | 223 行 bind-only 客户端；无 RFC5780 行为探测与 NatType 判定，未接入 runtime |
+| **UDP 打洞** | ✅❓ | `internal/punch` 全栈：socket 阵列/监听池/`UdpHolePunchRpc` 五方法/三客户端/协调器（策略决策表+退避+黑名单），Go-Go 回环 cone 打洞 e2e 绿；与 Rust 互通待验证 |
+| TCP 打洞 | ✅❓ | `tcphole` 服务化（`TcpHolePunchRpc.ExchangeMappedAddr`）+ 发起端同时连接/回退监听，成功连接经 `NewTCPPacketChannel` 升级为已认证 peer 会话，e2e 绿；互通待验证 |
+| 直连连接器（global map 驱动） | ✅❓ | `internal/directconn`：`DirectConnectorRpc`（GetIpList/SendUdpHolePunchPacket 回环辅助）、候选=路由+OSPF+GlobalPeerMap、监听器展开→UDP 辅助拨号/直连、Manual 管理；已接入 `core/runtime.go`（`initP2P`）；互通待验证 |
+| STUN/NAT 分类 | ✅❓ | `internal/stun`：RFC5389/5780 行为探测（三探测/服务器）+ 全 NatType 分类 + UDP/TCP 端口映射 + Collector 后台循环；`punch`/`directconn`/`tcphole` 共用；互通待验证 |
 | UPnP/NAT-PMP 映射 | ✅❓ | `mapping/` 有实现+测试，互通待验证 |
 | public_ipv6 / NDP | ✅ | `publicipv6/` |
 
@@ -161,21 +207,48 @@
 - [ ] **QUIC**：接真 QUIC（建议 quic-go + 与 Rust quinn-plaintext 对齐的 TLS 设置或 plaintext 扩展），
   或在 TODOLIST/README 明确宣布 Go 产品矩阵不含 QUIC 隧道（移除 `quic://` scheme 以免误配）。
 
-### P2 — 打洞与直连（Rust 核心卖点，当前缺失）
-- [ ] STUN RFC5780 行为探测 + NatType 分类（`common/stun.rs` 为行为规范），接入 runtime。
-- [ ] UDP 打洞协调器 + cone / sym-to-cone / easy-sym / both-sym 四策略（`udp_hole_punch/` 为规范）；
-  打通生成的 `PunchHole/NatType/SendPunchPacketEasySym` proto 服务。
-- [ ] 打洞/TCP 打洞成功套接字升级为已认证 peer 会话。
-- [ ] 直连连接器：peer-center GlobalPeerMap → 地址发现 → UDP punch/TCP dial 循环；
-  把 `connector/`、`mapping/`、`stun/` 接入 `core/runtime.go` 启动序列。
-- [ ] Manual 连接器管理。
+### P2 — 打洞与直连（本次已做，待 CI/互通复验）
+- [x] STUN RFC5780 行为探测 + NatType 分类（`internal/stun/detect.go` +
+  `collector.go`），已接入 runtime（`core.initP2P`）。
+- [x] UDP 打洞协调器 + cone / sym-to-cone / easy-sym / both-sym 四策略
+  （`internal/punch`）；`UdpHolePunchRpc` 五方法走生成 proto 类型
+  （protojson 编码），sym 互斥与 both-easy-sym 忙回滚对齐参考。
+- [x] 打洞/TCP 打洞成功套接字升级为已认证 peer 会话（`AdoptUDP`/
+  `DialUDPWithSocket` → `PeerConnectionManager.Connect/Accept` 认证并校验
+  peer ID；TCP 经 `NewTCPPacketChannel`）。
+- [x] 直连连接器：候选（路由+OSPF+GlobalPeerMap）→ `GetIpList` 地址发现 →
+  UDP punch 辅助/直接拨号循环；`connector/` 面以 `directconn` 实现，
+  `stun/` 已接入 runtime（`mapping/` 经 `punch.PortMapper` 接口预留）。
+- [x] Manual 连接器管理（`directconn.ManualManager`：add/remove/clear/list、
+  重连节奏与按 scheme 预算）。
+- 剩余：对端 NAT 类型随 OSPF `RoutePeerInfo` 携带（当前按 Unknown 回退）；
+  `mapping/` UPnP 租约接入 `PortMapper`；与 Rust oracle 打洞互通矩阵。
 
-### P3 — 传输层补全
-- [ ] WG 会话 rekey/keepalive 轮换（boringtun expiry 语义）。
-- [ ] fake_tcp：Windows WinDivert 与 macOS BPF 原始抓包（对照 `tunnel/fake_tcp/` 行为）。
-- [ ] wss 自签证书拨号路径（insecure_tls 行为）。
-- [ ] bind-to-device（`BINDTODEVICE`/IP_BOUND_IF/IP_UNICAST_IF）。
-- [ ] ring 内存隧道（仅测试便利，最低优先）。
+### P3 — 传输层补全（本次已做，待 CI 复验）
+- [x] WG 会话 rekey/keepalive 轮换（boringtun expiry 语义）：
+  `wg_timers.go` 会话级 routine task（REKEY_AFTER_TIME=120s 触发握手、
+  REKEY_TIMEOUT=5s 重试、REKEY_ATTEMPT_TIME=90s 放弃、KEEPALIVE_TIMEOUT=10s
+  keepalive（native kind=3）、REJECT_AFTER_TIME=180s 收发双侧拒收过期密钥）；
+  握手按会话串行化避免两侧采纳顺序错位；拨号会话即发起方、接受会话为响应方；
+  服务端空闲 61s 回收（对照 oracle `peer_map.retain`）。
+- [x] fake_tcp：Windows WinDivert（运行时 `syscall.NewLazyDLL("WinDivert.dll")`，
+  SNIFF 读取 + "false" 注入，2.2 地址布局 outbound 位，DLL/驱动随部署提供，
+  缺失时回退 TCP 仿真）与 macOS BPF（`/dev/bpf*` 立即模式 + BIOCSETIF +
+  Ethernet/Null/Loop/Raw 数据链路转换，root）；共享用户态过滤
+  `faketcp_capture_filter.go`（自 Linux 后端抽出），平台行为对照
+  `tunnel/fake_tcp/netfilter/{windivert,macos_bpf}.rs`。
+- [x] wss 自签证书拨号路径（insecure_tls 行为）：`tls_insecure.go` 进程级
+  自签证书（ECDSA P-256，SAN localhost/loopback）；`ServeTLS(ctx,"","")`
+  无密钥材料时自动装配；`DialWebSocket` 对 `wss://` 默认
+  InsecureSkipVerify + IP 主机 SNI 改写 "localhost"；`ListenPacketChannel`
+  的 `wss://` 分支现以 TLS 服务（此前是明文 WS，属于修复）。
+- [x] bind-to-device（`BINDTODEVICE`/IP_BOUND_IF/IP_UNICAST_IF）：
+  `bindsock*.go` 平台 sockopt + `transport.BindDevice` 选项贯穿
+  Dial/Listen 全部传输；端点 URL 路径设备名（`wg://host:port/eth0`，对照
+  `TunnelUrl::bind_dev`）已接入 `core/runtime.go` 拨号；默认不绑定（对比
+  oracle 的 Auto 默认，见 SE §11.3 迁移记录）。
+- [x] ring 内存隧道：`ring.go`（`ring://` UUID 注册表 + 双向各 128 深度
+  环形队列 + `CreateRingTunnelPair`），已注册进 Dial/ListenPacketChannel。
 
 ### P4 — 验证与文档
 - [ ] `docs/GO_REWRITE_TODOLIST.md`：把 NET-07/NET-08/P2P-02/P2P-03/P2P-05 状态改为实测值
@@ -183,6 +256,8 @@
 - [ ] 为每个 P1/P2 项先补 Rust oracle 金标准向量（`tools/gen-fixtures`），再实现 Go 侧。
 - [ ] `go test -race ./...` 在 Linux CI 全绿后，跑 `interop.yml` 全矩阵（tcp/udp/wg/wss ×
   legacy/noise × 双向），全部绿后才可声称功能对齐（SE §2 第 6 条契约）。
+- [ ] P3 平台项的实证验证：WinDivert 需要管理员 + 驱动部署、macOS BPF 需要
+  root，CI 仅编译验证与错误路径单测；发布前在真机各跑一次端到端抓包回路。
 
 ## 5. 复验命令（全部经 GitHub Actions，本地不编译）
 

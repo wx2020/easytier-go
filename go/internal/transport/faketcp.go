@@ -56,11 +56,14 @@ func IsFakeTCPPrivileged() bool {
 }
 
 // ListenFakeTCP binds a fake-TCP listener. maxFrame bounds the stream frame.
-func ListenFakeTCP(address string, maxFrame int) (*FakeTCPService, error) {
+// Optional BindDevice pins the listener to a network interface.
+func ListenFakeTCP(address string, maxFrame int, opts ...BindOption) (*FakeTCPService, error) {
 	if maxFrame == 0 {
 		maxFrame = protocol.DefaultMaxStreamFrameSize
 	}
-	ln, err := net.Listen("tcp", address)
+	_, dev := resolveBindOption(address, opts)
+	listenConfig := net.ListenConfig{Control: bindDeviceControl(dev)}
+	ln, err := listenConfig.Listen(context.Background(), "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("listen fake-TCP on %q: %w", address, err)
 	}
@@ -160,15 +163,17 @@ func (s *FakeTCPService) isClosed() bool {
 	return s.closed
 }
 
-// DialFakeTCP establishes a fake-TCP session to address.
-func DialFakeTCP(ctx context.Context, address string, maxFrame int) (*FakeTCPSession, error) {
+// DialFakeTCP establishes a fake-TCP session to address. Optional
+// BindDevice pins the socket to a network interface.
+func DialFakeTCP(ctx context.Context, address string, maxFrame int, opts ...BindOption) (*FakeTCPSession, error) {
 	if ctx == nil {
 		return nil, errors.New("fake-TCP dial context is nil")
 	}
 	if maxFrame == 0 {
 		maxFrame = protocol.DefaultMaxStreamFrameSize
 	}
-	dialer := net.Dialer{}
+	_, dev := resolveBindOption(address, opts)
+	dialer := net.Dialer{Control: bindDeviceControl(dev)}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("dial fake-TCP %q: %w", address, err)

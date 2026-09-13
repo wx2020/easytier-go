@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -124,15 +125,19 @@ type MacOSBPFConfig struct {
 	Filter BPFProgram
 }
 
-// Open validates macOS BPF configuration.
+// Open validates macOS BPF configuration and opens the /dev/bpf backend
+// when running on darwin with the required privileges.
 func (c MacOSBPFConfig) Open() (PacketCapture, error) {
 	if c.Device == "" {
 		return nil, fmt.Errorf("macOS BPF requires a device: %w", ErrFakeTCPUnsupported)
 	}
+	if !IsFakeTCPPrivileged() {
+		return nil, fmt.Errorf("macOS BPF requires root: %w", ErrFakeTCPUnsupported)
+	}
 	if factory != nil {
 		return factory("darwin", c.Device, c.Filter)
 	}
-	return nil, fmt.Errorf("macOS BPF backend is not linked (GOOS=%s): %w", runtime.GOOS, ErrFakeTCPUnsupported)
+	return openMacOSCapture(c.Device, c.Filter)
 }
 
 // WindowsDivertConfig configures WinDivert capture/injection on Windows.
@@ -141,15 +146,19 @@ type WindowsDivertConfig struct {
 	Priority     int
 }
 
-// Open validates WinDivert configuration.
+// Open validates WinDivert configuration and opens the WinDivert.dll
+// backend when running elevated on Windows.
 func (c WindowsDivertConfig) Open() (PacketCapture, error) {
 	if c.FilterString == "" {
 		return nil, fmt.Errorf("windivert requires a filter string: %w", ErrFakeTCPUnsupported)
 	}
+	if !IsFakeTCPPrivileged() {
+		return nil, fmt.Errorf("windivert requires an elevated process: %w", ErrFakeTCPUnsupported)
+	}
 	if factory != nil {
 		return factory("windows", "", BPFProgram{Filter: c.FilterString})
 	}
-	return nil, fmt.Errorf("windivert backend is not linked (GOOS=%s): %w", runtime.GOOS, ErrFakeTCPUnsupported)
+	return openWindowsCapture(c.FilterString)
 }
 
 // CaptureFactory builds platform captures; tests inject fakes through it.
@@ -176,6 +185,37 @@ func platformCaptureSupported(device string) error {
 	default:
 		return fmt.Errorf("GOOS %s has no capture backend: %w", runtime.GOOS, ErrFakeTCPUnsupported)
 	}
+}
+
+// buildWinDivertFilter composes the WinDivert filter string for a TCP
+// endpoint, mirroring netfilter/windivert.rs build_filter: the TCP protocol
+// plus the destination (and optionally source) address and port, restricted
+// to one address family. A nil src matches any source.
+func buildWinDivertFilter(src, dst *net.UDPAddr) (string, error) {
+	if dst == nil || dst.IP == nil {
+		return "", fmt.Errorf("windivert filter requires a destination address")
+	}
+	srcV4 := src != nil && src.IP != nil && src.IP.To4() != nil
+	dstV4 := dst.IP.To4() != nil
+	if src != nil && srcV4 != dstV4 {
+		return "", fmt.Errorf("src/dst addr family mismatch")
+	}
+	term := func(kind string, addr *net.UDPAddr) []string {
+		ipKind := "ip"
+		if addr.IP.To4() == nil {
+			ipKind = "ipv6"
+		}
+		return []string{
+			fmt.Sprintf("%s.%sAddr == %s", ipKind, kind, addr.IP.String()),
+			fmt.Sprintf("tcp.%sPort == %d", kind, addr.Port),
+		}
+	}
+	parts := []string{"tcp"}
+	parts = append(parts, term("Dst", dst)...)
+	if src != nil {
+		parts = append(parts, term("Src", src)...)
+	}
+	return strings.Join(parts, " and "), nil
 }
 
 // FakeTCPConnState is the per-connection negotiation state.

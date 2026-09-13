@@ -5,9 +5,30 @@
 
 package transport
 
+import (
+	"fmt"
+
+	"golang.org/x/sys/windows"
+)
+
 func isFakeTCPPrivileged() bool {
-	// On Windows, WinDivert/pcap requires Administrator. For Go-Go tests we
-	// treat the fallback TCP emulation as compatible and report non-privileged
-	// without failing.
-	return false
+	// WinDivert requires an elevated process (the driver service install
+	// needs Administrator). DLL presence is checked separately at open time.
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return false
+	}
+	defer token.Close()
+	return token.IsElevated()
+}
+
+// openWindowsCapture selects the WinDivert backend for the platform
+// dispatch from faketcp_capture.go.
+func openWindowsCapture(filterString string) (PacketCapture, error) {
+	return openWinDivertCapture(filterString)
+}
+
+// openMacOSCapture has no implementation on Windows.
+func openMacOSCapture(device string, program BPFProgram) (PacketCapture, error) {
+	return nil, fmt.Errorf("macOS BPF backend is not linked (GOOS=%s): %w", "windows", ErrFakeTCPUnsupported)
 }

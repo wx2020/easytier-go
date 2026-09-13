@@ -128,9 +128,22 @@ func (r *DetectResult) hasPortChanged() bool {
 	return false
 }
 
+// source returns the probing socket address, deriving it from the first
+// response when the result was assembled manually without one.
+func (r *DetectResult) source() netip.AddrPort {
+	if r.SourceAddr.IsValid() {
+		return r.SourceAddr
+	}
+	if len(r.Responses) > 0 {
+		return r.Responses[0].LocalAddr
+	}
+	return netip.AddrPort{}
+}
+
 func (r *DetectResult) isOpenInternet() bool {
+	source := r.source()
 	for i := range r.Responses {
-		if r.Responses[i].MappedValid && r.Responses[i].MappedAddr == r.SourceAddr {
+		if r.Responses[i].MappedValid && r.Responses[i].MappedAddr == source {
 			return true
 		}
 	}
@@ -138,8 +151,9 @@ func (r *DetectResult) isOpenInternet() bool {
 }
 
 func (r *DetectResult) isNoPAT() bool {
+	source := r.source()
 	for i := range r.Responses {
-		if r.Responses[i].MappedValid && r.Responses[i].MappedAddr.Port() == r.SourceAddr.Port() {
+		if r.Responses[i].MappedValid && r.Responses[i].MappedAddr.Port() == source.Port() {
 			return true
 		}
 	}
@@ -428,16 +442,23 @@ func decodeAddressAttribute(attributeType uint16, value []byte, transactionID [1
 	}
 	if attributeType == attrXORMappedAddr {
 		port ^= uint16(magicCookie >> 16)
-		var mask [16]byte
-		binary.BigEndian.PutUint32(mask[:4], magicCookie)
-		copy(mask[4:], transactionID[:])
-		raw := addr.As16()
-		for i := range raw {
-			raw[i] ^= mask[i]
-		}
 		if addr.Is4() {
-			addr = netip.AddrFrom4([4]byte{raw[12], raw[13], raw[14], raw[15]})
+			raw := addr.As4()
+			cookie := [4]byte{
+				byte(magicCookie >> 24 & 0xFF), byte(magicCookie >> 16 & 0xFF), byte(magicCookie >> 8 & 0xFF), byte(magicCookie & 0xFF),
+			}
+			for i := range raw {
+				raw[i] ^= cookie[i]
+			}
+			addr = netip.AddrFrom4(raw)
 		} else {
+			raw := addr.As16()
+			var mask [16]byte
+			binary.BigEndian.PutUint32(mask[:4], magicCookie)
+			copy(mask[4:], transactionID[:])
+			for i := range raw {
+				raw[i] ^= mask[i]
+			}
 			addr = netip.AddrFrom16(raw)
 		}
 	}
@@ -611,6 +632,10 @@ func udpAddrToAddrPort(addr *net.UDPAddr) (netip.AddrPort, bool) {
 // udpBindRequest sends one binding request (repeated for loss resilience)
 // and waits for the matching response.
 func udpBindRequest(ctx context.Context, socket *net.UDPConn, demux *responseDemux, server netip.AddrPort, changeIP, changePort bool) (BindResponse, error) {
+	// Subscribe before sending: a loopback reply can arrive immediately.
+	subscription := demux.subscribe()
+	defer demux.unsubscribe(subscription)
+
 	ids := make([][12]byte, 0, probeRepeat)
 	for i := 0; i < probeRepeat; i++ {
 		id := newTransactionID()
@@ -624,8 +649,6 @@ func udpBindRequest(ctx context.Context, socket *net.UDPConn, demux *responseDem
 
 	start := time.Now()
 	deadline := time.Now().Add(probeResponseTimeout)
-	subscription := demux.subscribe()
-	defer demux.unsubscribe(subscription)
 
 	for {
 		remaining := time.Until(deadline)

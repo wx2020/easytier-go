@@ -24,7 +24,8 @@ const websocketSessionQueueSize = 128
 // WebSocketOptions controls websocket handshakes and peer message limits.
 // Header is used for client handshake headers, CheckOrigin and ResponseHeader
 // are used by a websocket listener. TLSClientConfig is used for wss dials;
-// TLSServerConfig enables TLS for a listener's Serve method.
+// TLSServerConfig enables TLS for a listener's Serve method. BindDevice pins
+// the underlying TCP sockets to a network interface.
 type WebSocketOptions struct {
 	MaxMessageSize  int
 	CheckOrigin     func(*http.Request) bool
@@ -33,6 +34,7 @@ type WebSocketOptions struct {
 	ResponseHeader  http.Header
 	TLSClientConfig *tls.Config
 	TLSServerConfig *tls.Config
+	BindDevice      string
 }
 
 // WSOptions is a short alias for WebSocketOptions.
@@ -208,7 +210,9 @@ func ListenWebSocket(address string, options ...WebSocketOptions) (*WebSocketLis
 	if err != nil {
 		return nil, err
 	}
-	listener, err := net.Listen("tcp", address)
+	dev := resolveBindDevice(configured.BindDevice, address)
+	listenConfig := net.ListenConfig{Control: bindDeviceControl(dev)}
+	listener, err := listenConfig.Listen(context.Background(), "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("listen websocket on %q: %w", address, err)
 	}
@@ -416,7 +420,11 @@ func DialWebSocket(ctx context.Context, address string, options ...WebSocketOpti
 	if configured.Origin != "" {
 		header.Set("Origin", configured.Origin)
 	}
-	dialer := websocket.Dialer{TLSClientConfig: cloneTLSConfig(configured.TLSClientConfig)}
+	_, dev := resolveBindOption(address, []BindOption{BindDevice(configured.BindDevice)})
+	dialer := websocket.Dialer{
+		TLSClientConfig: cloneTLSConfig(configured.TLSClientConfig),
+		NetDialContext:  (&net.Dialer{Control: bindDeviceControl(dev)}).DialContext,
+	}
 	connection, _, err := dialer.DialContext(ctx, address, header)
 	if err != nil {
 		return nil, fmt.Errorf("dial websocket %q: %w", address, err)

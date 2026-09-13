@@ -39,11 +39,13 @@ func NewTCPPacketChannel(connection net.Conn, maxFrame int) (*TCPPacketChannel, 
 }
 
 // DialTCP connects to an EasyTier TCP tunnel endpoint with a context deadline.
-func DialTCP(ctx context.Context, address string, maxFrame int) (*TCPPacketChannel, error) {
+// Optional BindDevice pins the socket to a network interface.
+func DialTCP(ctx context.Context, address string, maxFrame int, opts ...BindOption) (*TCPPacketChannel, error) {
 	if ctx == nil {
 		return nil, errors.New("TCP dial context is nil")
 	}
-	dialer := net.Dialer{}
+	_, dev := resolveBindOption(address, opts)
+	dialer := net.Dialer{Control: bindDeviceControl(dev)}
 	connection, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return nil, fmt.Errorf("dial TCP tunnel %q: %w", address, err)
