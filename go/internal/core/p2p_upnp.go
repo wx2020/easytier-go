@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/EasyTier/EasyTier/go/internal/mapping"
-	"github.com/EasyTier/EasyTier/go/internal/punch"
 )
 
 // upnpPortMapper adapts mapping.Mapper to the punch.PortMapper contract: the
