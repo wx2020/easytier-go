@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
+	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
 const (
@@ -41,6 +42,12 @@ type Advertisement struct {
 	// UDPNatType is the origin's self-reported UDP NAT classification
 	// (reference RoutePeerInfo.udp_nat_type); Unknown when not probed.
 	UDPNatType common.NatType
+	// PeerRouteID is the origin's random per-start route identity (reference
+	// RoutePeerInfo.peer_route_id); it powers duplicate-peer detection.
+	PeerRouteID uint64
+	// TrustedCredentials carries the admin-signed credential proofs published
+	// by the origin (reference RoutePeerInfo.trusted_credential_pubkeys).
+	TrustedCredentials []*peerrpc.TrustedCredentialPubkeyProof
 }
 
 // Marshal encodes an advertisement in a deterministic, bounded binary format.

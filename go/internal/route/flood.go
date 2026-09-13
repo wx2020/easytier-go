@@ -50,6 +50,7 @@ type Flooder struct {
 	links      map[uint32]uint32
 	proxyCIDRs []string
 	natTypes   map[uint32]common.NatType
+	routeIDs   map[uint32]uint64
 	seen       map[uint32]uint64
 	lastSeen   map[uint32]time.Time
 
@@ -77,6 +78,7 @@ func NewFlooder(localPeerID uint32, table *ConvergenceTable, broadcast Broadcast
 		sessionID:   NewSessionID(),
 		links:       make(map[uint32]uint32),
 		natTypes:    make(map[uint32]common.NatType),
+		routeIDs:    make(map[uint32]uint64),
 		seen:        make(map[uint32]uint64),
 		lastSeen:    make(map[uint32]time.Time),
 	}, nil
@@ -133,6 +135,33 @@ func (f *Flooder) UDPNatType(peerID uint32) common.NatType {
 	return common.NatType_Unknown
 }
 
+// PeerRouteID returns the per-start route identity last flooded by peerID,
+// or 0 when unknown. It powers duplicate-peer detection.
+func (f *Flooder) PeerRouteID(peerID uint32) uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.routeIDs[peerID]
+}
+
+// OriginVersion returns the local origin's current LSA version.
+func (f *Flooder) OriginVersion() uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.version
+}
+
+// SeenVersion returns the last applied LSA version from peerID.
+func (f *Flooder) SeenVersion(peerID uint32) uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.seen[peerID]
+}
+
+// LocalPeerID returns the flooder's origin peer id.
+func (f *Flooder) LocalPeerID() uint32 {
+	return f.localPeerID
+}
+
 // Originate builds, installs, and broadcasts the local LSA, bumping the
 // version. It returns the originated advertisement.
 func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
@@ -159,12 +188,13 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		peers = peers[:floodMaxPeers]
 	}
 	advertisement := Advertisement{
-		Origin:     f.localPeerID,
-		Version:    version,
-		Peers:      peers,
-		ProxyCIDRs: cidrs,
-		Timestamp:  time.Now().Unix(),
-		UDPNatType: natType,
+		Origin:      f.localPeerID,
+		Version:     version,
+		Peers:       peers,
+		ProxyCIDRs:  cidrs,
+		Timestamp:   time.Now().Unix(),
+		UDPNatType:  natType,
+		PeerRouteID: f.sessionID,
 	}
 	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return Advertisement{}, err
@@ -173,6 +203,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 	f.mu.Lock()
 	f.seen[advertisement.Origin] = advertisement.Version
 	f.natTypes[advertisement.Origin] = advertisement.UDPNatType
+	f.routeIDs[advertisement.Origin] = advertisement.PeerRouteID
 	f.lastSeen[advertisement.Origin] = time.Now()
 	f.mu.Unlock()
 	if err := f.broadcast(ctx, advertisement, 0); err != nil {
@@ -200,6 +231,7 @@ func (f *Flooder) Receive(ctx context.Context, advertisement Advertisement, from
 	f.mu.Lock()
 	f.seen[advertisement.Origin] = advertisement.Version
 	f.natTypes[advertisement.Origin] = advertisement.UDPNatType
+	f.routeIDs[advertisement.Origin] = advertisement.PeerRouteID
 	f.lastSeen[advertisement.Origin] = time.Now()
 	f.mu.Unlock()
 	if err := f.broadcast(ctx, advertisement, fromPeer); err != nil {
@@ -221,6 +253,8 @@ func (f *Flooder) Expire(now time.Time, maxAge time.Duration) int {
 		if now.Sub(last) > maxAge {
 			delete(f.lastSeen, origin)
 			delete(f.seen, origin)
+			delete(f.natTypes, origin)
+			delete(f.routeIDs, origin)
 			dropped++
 		}
 	}

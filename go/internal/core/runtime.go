@@ -81,10 +81,13 @@ type NodeOptions struct {
 	TUNDestination   uint32
 	NoTUN            bool
 	EnableEncryption bool
-	DHCP             bool
-	IPv4             string
-	IPv6             string
-	TunAddresses     *tun.AssignedAddresses
+	// NetworkSecret is the raw network identity secret; it verifies OSPF
+	// credential proofs. Empty on credential nodes.
+	NetworkSecret string
+	DHCP          bool
+	IPv4          string
+	IPv6          string
+	TunAddresses  *tun.AssignedAddresses
 
 	// EnableOSPF starts the OSPF LSA flooder (route/flood.go) and feeds its
 	// converged routes into the peer router. LSA flooding runs over the
@@ -283,6 +286,7 @@ func ListenWithOptions(options NodeOptions) (*Node, error) {
 			tunMTU:           options.TUNMTU,
 			tunDestination:   options.TUNDestination,
 			noTun:            options.NoTUN,
+			networkSecret:    options.NetworkSecret,
 			tunAddresses:     options.TunAddresses,
 			ospfEnabled:      options.EnableOSPF,
 			ospfDomain:       options.OSPFDomain,
@@ -321,9 +325,10 @@ type nodeRuntime struct {
 
 	// p2pConfig and p2p carry the NAT traversal stack. p2pDomain scopes its
 	// peer RPC services; p2p is published by the serve goroutine.
-	p2pConfig *P2PConfig
-	p2pDomain string
-	p2p       *p2pRuntime
+	p2pConfig     *P2PConfig
+	networkSecret string
+	p2pDomain     string
+	p2p           *p2pRuntime
 
 	portal PortalForwarder
 
@@ -990,7 +995,9 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 		return fmt.Errorf("create ospf flooder: %w", err)
 	}
 	flooder.SetSessionID(sessionID)
-	if err := peerRPC.Register(domain, route.NewOSPFService(flooder)); err != nil {
+	if err := peerRPC.Register(domain, route.NewOSPFService(flooder, &route.OSPFServiceConfig{
+		NetworkSecret: r.networkSecret,
+	})); err != nil {
 		return fmt.Errorf("register ospf rpc service: %w", err)
 	}
 	r.stateMu.Lock()

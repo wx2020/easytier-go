@@ -467,6 +467,7 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 			LegacyCipher:     legacyCipher,
 		},
 		PeerCenterNetworkName: cfg.NetworkIdentity.NetworkName,
+		NetworkSecret:         cfg.NetworkIdentity.NetworkSecret,
 		NoTUN:                 noTun,
 		EnableEncryption:      enableEncryption,
 		DHCP:                  cfg.DHCP,

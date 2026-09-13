@@ -73,6 +73,25 @@
     `punch.PortMapper`），租约按端口幂等、公网地址取自 STUN 收集器、LAN 地址经
     UDP route 探测；`initP2P` 在未禁用 UPnP 时把适配器接入 punch 监听池。
 
+### 2.0c 第六轮：OSPF 会话语义（P1 项，洁净室实现，2026-09-13）
+
+20. **dst_session_id 跟踪**：新增 `route.SessionTracker`，`SyncRouteInfo` 处理器按
+    from-peer 记录会话标识，变化即代表对端路由服务重启（参考
+    `update_dst_session_id` 语义；Go 洪泛无 per-dst 增量状态，观察即落点）。
+21. **重复 peer 检测**：`Advertisement` 携带 origin 的 `PeerRouteID`（参考
+    `peer_route_id`，Go 侧即会话标识），Flooder 按 origin 存储并提供
+    `PeerRouteID/SeenVersion/OriginVersion/LocalPeerID` 访问器；处理器按参考
+    `check_duplicate_peer_id` 两个方向判定（他人冒充自己且版本更高；发送者自身
+    条目版本回退且路由标识不同），命中即回
+    `SyncRouteInfoError_DuplicatePeerId` 且不安装该 LSA；无路由标识（0）的条目
+    豁免以保持 Go-Go 兼容。MeshBroadcast 解码对端拒绝并上抛。
+22. **信任凭证证明**：新增 `route/ospf_credentials.go`——参考 HMAC-SHA256（密钥=
+    网络密钥，前缀 `easytier credential proof`，消息=凭证 protobuf 编码）的签发、
+    验证、过滤与 relay 许可判定；线协议在 origin 条目携带
+    `trusted_credential_pubkeys`；OSPFServiceConfig 提供网络密钥与 credential
+    peer 分类回调，凭证 peer 的 conn info 需验证通过的 allow_relay 才接受；
+    core 经 NodeOptions.NetworkSecret 装配。金标准向量经 Perl 独立计算。
+
 ### 2.1 第二轮：旧版流量加密（P1 项，洁净室实现，待 CI 验证）
 
 5. **`protocol.DeriveLegacyKeys(secret)`**：复刻参考实现的 128/256 位全局流量密钥
