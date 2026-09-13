@@ -3094,7 +3094,18 @@ func runRelayViaTransport(t *testing.T, transport string, mgrA, mgrB, mgrC *peer
 
 func transportListenPacketChannel(t *testing.T, scheme string) (transport.PacketListener, error) {
 	t.Helper()
-	// Use ListenPacketChannel which internally handles Serve for udp/wg/quic/ws
+	if scheme == "quic" {
+		// The quic:// scheme is disabled on the public channel surface
+		// (GO_REWRITE_SE.md §11.4); Go-only exercises use the transport
+		// directly.
+		svc, err := transport.ListenQUIC("127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		go func() { _ = svc.Serve(context.Background()) }()
+		return quicInteropListener{svc}, nil
+	}
+	// Use ListenPacketChannel which internally handles Serve for udp/wg/ws
 	ln, err := transport.ListenPacketChannel(scheme, "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -3103,6 +3114,9 @@ func transportListenPacketChannel(t *testing.T, scheme string) (transport.Packet
 }
 
 func transportDialPacketChannel(ctx context.Context, scheme, addr string) (transport.PacketChannel, error) {
+	if scheme == "quic" {
+		return transport.DialQUIC(ctx, addr)
+	}
 	return transport.DialPacketChannel(ctx, scheme, addr, 0)
 }
 
@@ -3380,4 +3394,22 @@ func testWGCompressedNoise(t *testing.T) {
 }
 func testQUICCompressedNoise(t *testing.T) {
 	runCompressedInteropViaTransport(t, "quic", protocol.CompressionZstd, protocol.CompressionNone, "noise_xx")
+}
+
+// quicInteropListener adapts *transport.QUICService to the PacketListener
+// contract for Go-only QUIC exercises.
+type quicInteropListener struct {
+	svc *transport.QUICService
+}
+
+func (l quicInteropListener) Accept(ctx context.Context) (transport.PacketChannel, error) {
+	return l.svc.Accept(ctx)
+}
+
+func (l quicInteropListener) Close() error {
+	return l.svc.Close()
+}
+
+func (l quicInteropListener) Address() net.Addr {
+	return l.svc.Address()
 }
