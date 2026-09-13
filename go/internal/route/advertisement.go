@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"sort"
 	"unicode/utf8"
+
+	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 )
 
 const (
@@ -36,6 +38,9 @@ type Advertisement struct {
 	Peers      []PeerCost
 	ProxyCIDRs []string
 	Timestamp  int64
+	// UDPNatType is the origin's self-reported UDP NAT classification
+	// (reference RoutePeerInfo.udp_nat_type); Unknown when not probed.
+	UDPNatType common.NatType
 }
 
 // Marshal encodes an advertisement in a deterministic, bounded binary format.

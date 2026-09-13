@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 )
 
 // floodFabric is an in-memory broadcast mesh for tests.
@@ -162,5 +164,50 @@ func TestFlooderValidation(t *testing.T) {
 	}
 	if _, err := NewFlooder(1, nil, nil); err == nil {
 		t.Fatal("nil broadcast must fail")
+	}
+}
+
+// The local NAT classification rides originated LSAs and per-origin
+// classifications are recorded from received LSAs for hole-punch strategy
+// selection.
+func TestFlooderPropagatesNATType(t *testing.T) {
+	var broadcastNatType common.NatType
+	flooder, err := NewFlooder(5, nil, func(ctx context.Context, a Advertisement, except uint32) error {
+		broadcastNatType = a.UDPNatType
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flooder.SetNATTypeFn(func() common.NatType { return common.NatType_PortRestricted })
+
+	advertised, err := flooder.Originate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advertised.UDPNatType != common.NatType_PortRestricted {
+		t.Fatalf("originated nat type = %v", advertised.UDPNatType)
+	}
+	if broadcastNatType != common.NatType_PortRestricted {
+		t.Fatalf("broadcast nat type = %v", broadcastNatType)
+	}
+	if flooder.UDPNatType(5) != common.NatType_PortRestricted {
+		t.Fatalf("local lookup = %v", flooder.UDPNatType(5))
+	}
+	if flooder.UDPNatType(9) != common.NatType_Unknown {
+		t.Fatalf("unknown peer lookup = %v", flooder.UDPNatType(9))
+	}
+
+	remote := Advertisement{
+		Origin:     9,
+		Version:    1,
+		Timestamp:  time.Now().Unix(),
+		UDPNatType: common.NatType_Symmetric,
+	}
+	if _, err := flooder.Receive(context.Background(), remote, 3); err != nil {
+		t.Fatal(err)
+	}
+	if flooder.UDPNatType(9) != common.NatType_Symmetric {
+		t.Fatalf("remote lookup = %v", flooder.UDPNatType(9))
 	}
 }

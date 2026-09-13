@@ -1441,7 +1441,7 @@ func tryRustWGNoise(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("WG noise Rust interop fallback to Go-Go")
+	t.Logf("WG noise Rust interop pending: the Go session uses the native-magic double, real boringtun interop is not implemented; falling back to Go-Go")
 	return false
 }
 

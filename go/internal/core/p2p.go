@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/EasyTier/EasyTier/go/internal/config"
 	"github.com/EasyTier/EasyTier/go/internal/directconn"
+	"github.com/EasyTier/EasyTier/go/internal/mapping"
 	"github.com/EasyTier/EasyTier/go/internal/peer"
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
@@ -109,13 +111,36 @@ func (r *nodeRuntime) initP2P(ctx context.Context) error {
 	collector := stun.NewCollector(r.p2pConfig.UDPServers, r.p2pConfig.TCPServers, r.p2pConfig.UDPServersV6)
 	collector.Start(ctx)
 
+	// Feed the local NAT classification into OSPF LSAs so remote peers
+	// learn it through RoutePeerInfo.udp_nat_type.
+	if ospf := r.OSPF(); ospf != nil {
+		ospf.SetNATTypeFn(func() common.NatType {
+			return collector.GetStunInfo().GetUdpNatType()
+		})
+	}
+
 	peerRPC, err := r.ensurePeerRPC()
 	if err != nil {
 		return err
 	}
 
 	// Punch listener sessions arrive authenticated from remote initiators.
-	punchPool := punch.NewListenerPool(collector, nil, func(session *transport.UDPSession) {
+	// UPnP leases a public port for the pool unless disabled.
+	var poolMapper punch.PortMapper
+	if !r.p2pConfig.DisableUPnP {
+		poolMapper = newUPnPPortMapper(mapping.NewMapper(mapping.MapperOptions{}), func() netip.Addr {
+			info := collector.GetStunInfo()
+			if len(info.GetPublicIp()) == 0 {
+				return netip.Addr{}
+			}
+			ip, err := netip.ParseAddr(info.GetPublicIp()[0])
+			if err != nil {
+				return netip.Addr{}
+			}
+			return ip.Unmap()
+		})
+	}
+	punchPool := punch.NewListenerPool(collector, poolMapper, func(session *transport.UDPSession) {
 		acceptCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := r.manager.Accept(acceptCtx, session); err != nil {
@@ -310,14 +335,20 @@ func (r *nodeRuntime) hasDirectPeer(peerID uint32) bool {
 }
 
 // p2pCandidates builds the punch candidate list: routed peers plus global
-// map entries, excluding already-direct sessions. Remote NAT types default
-// to unknown until the OSPF line protocol carries them.
+// map entries, excluding already-direct sessions. Remote NAT types come from
+// the OSPF-flooded RoutePeerInfo.udp_nat_type and default to Unknown until a
+// peer advertises its classification.
 func (r *nodeRuntime) p2pCandidates() func() []punch.Candidate {
 	return func() []punch.Candidate {
 		ids := r.p2pCandidateIDs()
+		ospf := r.OSPF()
 		out := make([]punch.Candidate, 0, len(ids))
 		for _, id := range ids {
-			out = append(out, punch.Candidate{PeerID: id, UDPNatType: common.NatType_Unknown})
+			natType := common.NatType_Unknown
+			if ospf != nil {
+				natType = ospf.UDPNatType(id)
+			}
+			out = append(out, punch.Candidate{PeerID: id, UDPNatType: natType})
 		}
 		return out
 	}

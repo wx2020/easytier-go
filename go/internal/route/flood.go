@@ -18,6 +18,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 )
 
 const (
@@ -40,11 +42,14 @@ type Flooder struct {
 	table       *ConvergenceTable
 	broadcast   BroadcastFunc
 
-	sessionID  uint64
+	sessionID uint64
+	// natTypeFn reports the local UDP NAT classification for outgoing LSAs.
+	natTypeFn  func() common.NatType
 	mu         sync.Mutex
 	version    uint64
 	links      map[uint32]uint32
 	proxyCIDRs []string
+	natTypes   map[uint32]common.NatType
 	seen       map[uint32]uint64
 	lastSeen   map[uint32]time.Time
 
@@ -71,6 +76,7 @@ func NewFlooder(localPeerID uint32, table *ConvergenceTable, broadcast Broadcast
 		broadcast:   broadcast,
 		sessionID:   NewSessionID(),
 		links:       make(map[uint32]uint32),
+		natTypes:    make(map[uint32]common.NatType),
 		seen:        make(map[uint32]uint64),
 		lastSeen:    make(map[uint32]time.Time),
 	}, nil
@@ -108,6 +114,25 @@ func (f *Flooder) SetProxyCIDRs(cidrs []string) {
 	f.proxyCIDRs = append([]string(nil), cidrs...)
 }
 
+// SetNATTypeFn installs the provider for the local UDP NAT classification
+// included in every originated LSA (reference RoutePeerInfo.udp_nat_type).
+func (f *Flooder) SetNATTypeFn(fn func() common.NatType) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.natTypeFn = fn
+}
+
+// UDPNatType returns the NAT classification last flooded by peerID, or
+// Unknown when nothing has been advertised yet.
+func (f *Flooder) UDPNatType(peerID uint32) common.NatType {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if natType, ok := f.natTypes[peerID]; ok {
+		return natType
+	}
+	return common.NatType_Unknown
+}
+
 // Originate builds, installs, and broadcasts the local LSA, bumping the
 // version. It returns the originated advertisement.
 func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
@@ -116,6 +141,10 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 	version := f.version
 	links := appendLinks(nil, f.links)
 	cidrs := append([]string(nil), f.proxyCIDRs...)
+	var natType common.NatType
+	if f.natTypeFn != nil {
+		natType = f.natTypeFn()
+	}
 	f.mu.Unlock()
 
 	peers := make([]PeerCost, 0, len(links))
@@ -135,6 +164,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		Peers:      peers,
 		ProxyCIDRs: cidrs,
 		Timestamp:  time.Now().Unix(),
+		UDPNatType: natType,
 	}
 	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return Advertisement{}, err
@@ -142,6 +172,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 	f.table.Accept(advertisement)
 	f.mu.Lock()
 	f.seen[advertisement.Origin] = advertisement.Version
+	f.natTypes[advertisement.Origin] = advertisement.UDPNatType
 	f.lastSeen[advertisement.Origin] = time.Now()
 	f.mu.Unlock()
 	if err := f.broadcast(ctx, advertisement, 0); err != nil {
@@ -168,6 +199,7 @@ func (f *Flooder) Receive(ctx context.Context, advertisement Advertisement, from
 	}
 	f.mu.Lock()
 	f.seen[advertisement.Origin] = advertisement.Version
+	f.natTypes[advertisement.Origin] = advertisement.UDPNatType
 	f.lastSeen[advertisement.Origin] = time.Now()
 	f.mu.Unlock()
 	if err := f.broadcast(ctx, advertisement, fromPeer); err != nil {

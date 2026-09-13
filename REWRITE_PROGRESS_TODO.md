@@ -59,6 +59,20 @@
 16. **WG 会话浮出竞态最终修复**：`surfaced atomic.Bool` CAS 守卫 + 握手完成与
     认证数据报两处幂等浮出（早期数据报先认证、握手后到的会话也能到达 Accept）。
 
+### 2.0b 第五轮：遗留项清理（2026-09-13）
+
+17. **互通矩阵诚实化**：cell 脚本此前对未实现/失败的 cell `exit 0`（假绿）；现失败一律
+    `exit 1`（矩阵仍为信息性 continue-on-error，但红灯可见）。`GO_REWRITE_TODOLIST.md`
+    同步更新 NET-07（降格）、P2P-02/03/05（新证据）、VAL-02（64/64 + 边界）并在 §7.7
+    追加更正说明；WG noise rust 方向的 Go-Go 回退明确标注。
+18. **OSPF 传播 udp_nat_type**：`Advertisement` 携带 origin 自报 NAT 分类（参考
+    `RoutePeerInfo.udp_nat_type`），`Flooder` 增加提供者注入（`SetNATTypeFn`，initP2P
+    用 STUN 收集器装配）与按 origin 的 `UDPNatType(peerID)` 查询；打洞协调器候选
+    不再恒为 Unknown，`CanPunchAsClient` 策略判定可用真实对端类型。
+19. **UPnP 接入**：新增 `core/p2p_upnp.go` 适配器（`mapping.Mapper` →
+    `punch.PortMapper`），租约按端口幂等、公网地址取自 STUN 收集器、LAN 地址经
+    UDP route 探测；`initP2P` 在未禁用 UPnP 时把适配器接入 punch 监听池。
+
 ### 2.1 第二轮：旧版流量加密（P1 项，洁净室实现，待 CI 验证）
 
 5. **`protocol.DeriveLegacyKeys(secret)`**：复刻参考实现的 128/256 位全局流量密钥

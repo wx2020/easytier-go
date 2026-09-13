@@ -6,6 +6,7 @@ package route
 import (
 	"testing"
 
+	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	"google.golang.org/protobuf/proto"
 
 	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
@@ -20,6 +21,7 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 		Timestamp:  1700000000,
 		Peers:      []PeerCost{{Peer: 3, Cost: 4}, {Peer: 11, Cost: 1}},
 		ProxyCIDRs: []string{"10.0.0.0/24", "192.168.1.0/24"},
+		UDPNatType: common.NatType_FullCone,
 	}
 	request, err := syncRequestFromAdvertisement(advertisement, 0x1234)
 	if err != nil {
@@ -45,6 +47,9 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 	}
 	if got.Timestamp != advertisement.Timestamp {
 		t.Fatalf("timestamp = %d, want %d", got.Timestamp, advertisement.Timestamp)
+	}
+	if got.UDPNatType != advertisement.UDPNatType {
+		t.Fatalf("udp nat type = %v, want %v", got.UDPNatType, advertisement.UDPNatType)
 	}
 	if len(got.Peers) != len(advertisement.Peers) {
 		t.Fatalf("edges = %d, want %d", len(got.Peers), len(advertisement.Peers))

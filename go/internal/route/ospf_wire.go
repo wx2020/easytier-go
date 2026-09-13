@@ -54,6 +54,7 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 		Version:    version,
 		LastUpdate: lastUpdate,
 		ProxyCidrs: append([]string(nil), cidrs...),
+		UdpNatType: adv.UDPNatType,
 	})
 	connected := make([]uint32, 0, len(peers))
 	for _, peer := range peers {
@@ -111,6 +112,7 @@ func advertisementFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID 
 		if item.GetPeerId() == origin {
 			adv.Version = uint64(item.GetVersion())
 			adv.ProxyCIDRs = append([]string(nil), item.GetProxyCidrs()...)
+			adv.UDPNatType = item.GetUdpNatType()
 			if item.GetLastUpdate() != nil {
 				adv.Timestamp = item.GetLastUpdate().GetSeconds()
 			}

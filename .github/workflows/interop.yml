@@ -404,13 +404,15 @@ jobs:
           echo "Interop cell: $CELL (transport=$TRANSPORT security=$SECURITY direction=$DIRECTION feature=${FEATURE:-<direct>})"
           echo "Oracle: $RUST_ORACLE_CORE, Go: $GO_CORE"
           # Golden-vector gate always runs (PR2)
-          (cd go && GOWORK=off go test -race -run TestGolden ./... 2>&1 | head -n 100) || (cd go && /usr/lib/go-1.24/bin/go test -race -run TestGolden ./... 2>&1 | head -n 100) || echo "golden-vector gate failed"
+          (cd go && GOWORK=off go test -race -run TestGolden ./... 2>&1 | head -n 100)
           # Per-cell integration: requires -tags=interop tests that start both nodes on 127.0.0.1:0
-          if (cd go && GOWORK=off go test -tags=interop -run TestInterop/${CELL} ./... 2>&1) || (cd go && /usr/lib/go-1.24/bin/go test -tags=interop -run TestInterop/${CELL} ./... 2>&1); then
+          # Failures are visible: the matrix is informational (continue-on-error),
+          # but a red cell must read as red instead of silently passing.
+          if (cd go && GOWORK=off go test -tags=interop -run TestInterop/${CELL} ./... 2>&1); then
             echo "Cell passed"
           else
-            echo "::warning::Interop cell $CELL not yet implemented or failed — see docs/GO_REWRITE_TODOLIST.md §7.4"
-            exit 0
+            echo "::error::Interop cell $CELL failed or is not implemented — see docs/GO_REWRITE_TODOLIST.md §7.4"
+            exit 1
           fi
       - name: Upload packet capture on failure
         if: failure()
