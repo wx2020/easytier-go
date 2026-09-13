@@ -141,7 +141,7 @@ func TestOSPFServiceDetectsDuplicatePeerID(t *testing.T) {
 		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{{
 			PeerId:      2,
 			PeerRouteId: flooder.SessionID() + 1,
-			Version:     flooder.OriginVersion() + 100,
+			Version:     uint32(flooder.OriginVersion() + 100),
 		}}},
 	}
 	conflictingWire, err := proto.Marshal(conflicting)
