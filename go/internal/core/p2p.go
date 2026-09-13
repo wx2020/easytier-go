@@ -82,6 +82,14 @@ func (r *nodeRuntime) P2P() *p2pRuntime {
 	return r.p2p
 }
 
+// OSPF returns the route flooder once the serve goroutine published it.
+func (n *Node) OSPF() *route.Flooder {
+	if n == nil || n.runtime == nil {
+		return nil
+	}
+	return n.runtime.OSPF()
+}
+
 // StunInfo returns the latest NAT snapshot from the collector.
 func (n *Node) StunInfo() *common.StunInfo {
 	if n == nil || n.runtime == nil {
