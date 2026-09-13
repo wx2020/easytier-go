@@ -18,6 +18,7 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/punch"
+	"github.com/EasyTier/EasyTier/go/internal/route"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
 	"github.com/EasyTier/EasyTier/go/internal/tcphole"
 	"github.com/EasyTier/EasyTier/go/internal/transport"
