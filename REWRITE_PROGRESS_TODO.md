@@ -92,6 +92,21 @@
     peer 分类回调，凭证 peer 的 conn info 需验证通过的 allow_relay 才接受；
     core 经 NodeOptions.NetworkSecret 装配。金标准向量经 Perl 独立计算。
 
+### 2.0d 第七轮：连接级凭证身份分类（P1 项收口，2026-09-13）
+
+23. **peer 身份模型**：`peer.PeerIdentity`（Unknown/Admin/Credential）在噪声握手完成
+    时按参考认证矩阵分类——远端静态公钥命中
+    `DirectPeerHandshakeConfig.TrustedCredentialPubkeys` → Credential；网络密钥证明
+    或管理员 pin → Admin。Legacy 会话以密钥摘要证明 → Admin。`PeerSession` 记录身份，
+    `PeerConnectionManager.IdentityOf(peerID)` 对外查询（OSPF 凭证强制的回调由此接活）。
+24. **信任列表发布**：`route.TrustedCredentialPubkeyFrom/SignManagedCredentials` 把
+    本地管理的凭证转成参考线格式并签名；`Flooder.SetTrustedCredentials` 使每条本地
+    LSA 携带 `trusted_credential_pubkeys`（管理员节点公告信任列表）。
+25. **core/主程序接线**：`NodeOptions.TrustedCredentials` + `--credential-file`
+    （JSON 凭证数组，`credential.LoadPublicCredentials` 加载）→ `initFlooder` 签名
+    信任列表并注入 `IsCredentialPeer = manager.IdentityOf == Credential`——上轮就绪
+    的 OSPF 凭证强制逻辑自此激活。端到端测试覆盖管理员对凭证客户端的分类。
+
 ### 2.1 第二轮：旧版流量加密（P1 项，洁净室实现，待 CI 验证）
 
 5. **`protocol.DeriveLegacyKeys(secret)`**：复刻参考实现的 128/256 位全局流量密钥
