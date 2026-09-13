@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/EasyTier/EasyTier/go/internal/credential"
 	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
@@ -90,4 +91,31 @@ func VerifiedCredentialAllowsRelay(proofs []*peerrpc.TrustedCredentialPubkeyProo
 		}
 	}
 	return false
+}
+
+// TrustedCredentialPubkeyFrom converts a locally managed credential into the
+// reference wire credential.
+func TrustedCredentialPubkeyFrom(cred credential.Credential) *peerrpc.TrustedCredentialPubkey {
+	cidrs := make([]string, 0, len(cred.ProxyCIDRs))
+	for _, prefix := range cred.ProxyCIDRs {
+		cidrs = append(cidrs, prefix.String())
+	}
+	return &peerrpc.TrustedCredentialPubkey{
+		Pubkey:            append([]byte(nil), cred.PublicKey[:]...),
+		Groups:            append([]string(nil), cred.Groups...),
+		AllowRelay:        cred.RelayAllowed,
+		ExpiryUnix:        cred.ExpiresAt.Unix(),
+		AllowedProxyCidrs: cidrs,
+		Reusable:          cred.Reusable,
+	}
+}
+
+// SignManagedCredentials converts and signs locally managed credentials for
+// publication in the node's own LSA.
+func SignManagedCredentials(credentials []credential.Credential, networkSecret string) ([]*peerrpc.TrustedCredentialPubkeyProof, error) {
+	wireCredentials := make([]*peerrpc.TrustedCredentialPubkey, 0, len(credentials))
+	for _, cred := range credentials {
+		wireCredentials = append(wireCredentials, TrustedCredentialPubkeyFrom(cred))
+	}
+	return SignTrustedCredentials(wireCredentials, networkSecret)
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/EasyTier/EasyTier/go/internal/acl"
 	"github.com/EasyTier/EasyTier/go/internal/config"
+	"github.com/EasyTier/EasyTier/go/internal/credential"
 	"github.com/EasyTier/EasyTier/go/internal/dns"
 	"github.com/EasyTier/EasyTier/go/internal/gateway"
 	"github.com/EasyTier/EasyTier/go/internal/peer"
@@ -84,10 +85,14 @@ type NodeOptions struct {
 	// NetworkSecret is the raw network identity secret; it verifies OSPF
 	// credential proofs. Empty on credential nodes.
 	NetworkSecret string
-	DHCP          bool
-	IPv4          string
-	IPv6          string
-	TunAddresses  *tun.AssignedAddresses
+	// TrustedCredentials are the locally managed credentials this admin node
+	// vouches for; they are signed and published in its OSPF LSA, and their
+	// public keys classify connecting noise peers as credential peers.
+	TrustedCredentials []credential.Credential
+	DHCP               bool
+	IPv4               string
+	IPv6               string
+	TunAddresses       *tun.AssignedAddresses
 
 	// EnableOSPF starts the OSPF LSA flooder (route/flood.go) and feeds its
 	// converged routes into the peer router. LSA flooding runs over the
@@ -262,39 +267,40 @@ func ListenWithOptions(options NodeOptions) (*Node, error) {
 		maxFrame:    options.MaxFrame,
 		connections: make(map[net.Conn]struct{}),
 		runtime: &nodeRuntime{
-			manager:          manager,
-			udp:              udpService,
-			peers:            append([]string(nil), options.Peers...),
-			reconnectInitial: options.ReconnectInitial,
-			reconnectMax:     options.ReconnectMax,
-			routeEngine:      options.RouteEngine,
-			routeRefresh:     options.RouteRefresh,
-			centerDomain:     options.PeerCenterNetworkName,
-			p2pConfig:        options.P2P,
-			p2pDomain:        options.PeerCenterNetworkName,
-			packetHandler:    options.PacketHandler,
-			rpcHandler:       options.RPCHandler,
-			rpcServer:        options.RPCServer,
-			webClient:        options.WebClient,
-			webServer:        options.WebServer,
-			webSocket:        options.WebSocket,
-			dns:              options.DNS,
-			stats:            options.Stats,
-			acl:              options.ACL,
-			receiveLimiter:   options.ReceiveLimiter,
-			tun:              options.TUN,
-			tunMTU:           options.TUNMTU,
-			tunDestination:   options.TUNDestination,
-			noTun:            options.NoTUN,
-			networkSecret:    options.NetworkSecret,
-			tunAddresses:     options.TunAddresses,
-			ospfEnabled:      options.EnableOSPF,
-			ospfDomain:       options.OSPFDomain,
-			icmpEnabled:      options.EnableICMPProxy,
-			icmpMappings:     append([]gateway.CIDRMapping(nil), options.ICMPProxyMappings...),
-			icmpExitNode:     options.ICMPExitNode,
-			raInterval:       options.RAAnnounceInterval,
-			portal:           options.Portal,
+			manager:            manager,
+			udp:                udpService,
+			peers:              append([]string(nil), options.Peers...),
+			reconnectInitial:   options.ReconnectInitial,
+			reconnectMax:       options.ReconnectMax,
+			routeEngine:        options.RouteEngine,
+			routeRefresh:       options.RouteRefresh,
+			centerDomain:       options.PeerCenterNetworkName,
+			p2pConfig:          options.P2P,
+			p2pDomain:          options.PeerCenterNetworkName,
+			packetHandler:      options.PacketHandler,
+			rpcHandler:         options.RPCHandler,
+			rpcServer:          options.RPCServer,
+			webClient:          options.WebClient,
+			webServer:          options.WebServer,
+			webSocket:          options.WebSocket,
+			dns:                options.DNS,
+			stats:              options.Stats,
+			acl:                options.ACL,
+			receiveLimiter:     options.ReceiveLimiter,
+			tun:                options.TUN,
+			tunMTU:             options.TUNMTU,
+			tunDestination:     options.TUNDestination,
+			noTun:              options.NoTUN,
+			networkSecret:      options.NetworkSecret,
+			trustedCredentials: options.TrustedCredentials,
+			tunAddresses:       options.TunAddresses,
+			ospfEnabled:        options.EnableOSPF,
+			ospfDomain:         options.OSPFDomain,
+			icmpEnabled:        options.EnableICMPProxy,
+			icmpMappings:       append([]gateway.CIDRMapping(nil), options.ICMPProxyMappings...),
+			icmpExitNode:       options.ICMPExitNode,
+			raInterval:         options.RAAnnounceInterval,
+			portal:             options.Portal,
 		},
 	}, nil
 }
@@ -325,10 +331,11 @@ type nodeRuntime struct {
 
 	// p2pConfig and p2p carry the NAT traversal stack. p2pDomain scopes its
 	// peer RPC services; p2p is published by the serve goroutine.
-	p2pConfig     *P2PConfig
-	networkSecret string
-	p2pDomain     string
-	p2p           *p2pRuntime
+	p2pConfig          *P2PConfig
+	networkSecret      string
+	trustedCredentials []credential.Credential
+	p2pDomain          string
+	p2p                *p2pRuntime
 
 	portal PortalForwarder
 
@@ -995,8 +1002,21 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 		return fmt.Errorf("create ospf flooder: %w", err)
 	}
 	flooder.SetSessionID(sessionID)
+	// Publish the admin-signed trust list and classify connecting peers
+	// against it (reference credential enforcement).
+	if len(r.trustedCredentials) != 0 {
+		proofs, err := route.SignManagedCredentials(r.trustedCredentials, r.networkSecret)
+		if err != nil {
+			return fmt.Errorf("sign trusted credentials: %w", err)
+		}
+		flooder.SetTrustedCredentials(proofs)
+	}
 	if err := peerRPC.Register(domain, route.NewOSPFService(flooder, &route.OSPFServiceConfig{
 		NetworkSecret: r.networkSecret,
+		IsCredentialPeer: func(peerID uint32) bool {
+			identity, ok := r.manager.IdentityOf(peerID)
+			return ok && identity == peer.PeerIdentityCredential
+		},
 	})); err != nil {
 		return fmt.Errorf("register ospf rpc service: %w", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
+	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
 const (
@@ -44,15 +45,16 @@ type Flooder struct {
 
 	sessionID uint64
 	// natTypeFn reports the local UDP NAT classification for outgoing LSAs.
-	natTypeFn  func() common.NatType
-	mu         sync.Mutex
-	version    uint64
-	links      map[uint32]uint32
-	proxyCIDRs []string
-	natTypes   map[uint32]common.NatType
-	routeIDs   map[uint32]uint64
-	seen       map[uint32]uint64
-	lastSeen   map[uint32]time.Time
+	natTypeFn          func() common.NatType
+	trustedCredentials []*peerrpc.TrustedCredentialPubkeyProof
+	mu                 sync.Mutex
+	version            uint64
+	links              map[uint32]uint32
+	proxyCIDRs         []string
+	natTypes           map[uint32]common.NatType
+	routeIDs           map[uint32]uint64
+	seen               map[uint32]uint64
+	lastSeen           map[uint32]time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -124,6 +126,14 @@ func (f *Flooder) SetNATTypeFn(fn func() common.NatType) {
 	f.natTypeFn = fn
 }
 
+// SetTrustedCredentials installs the admin-signed credential proofs published
+// in every originated LSA (reference RoutePeerInfo.trusted_credential_pubkeys).
+func (f *Flooder) SetTrustedCredentials(proofs []*peerrpc.TrustedCredentialPubkeyProof) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trustedCredentials = proofs
+}
+
 // UDPNatType returns the NAT classification last flooded by peerID, or
 // Unknown when nothing has been advertised yet.
 func (f *Flooder) UDPNatType(peerID uint32) common.NatType {
@@ -175,6 +185,9 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		natType = f.natTypeFn()
 	}
 	f.mu.Unlock()
+	var proofs []*peerrpc.TrustedCredentialPubkeyProof
+	proofs = append(proofs, f.trustedCredentials...)
+	f.mu.Unlock()
 
 	peers := make([]PeerCost, 0, len(links))
 	for peer, cost := range links {
@@ -188,13 +201,14 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		peers = peers[:floodMaxPeers]
 	}
 	advertisement := Advertisement{
-		Origin:      f.localPeerID,
-		Version:     version,
-		Peers:       peers,
-		ProxyCIDRs:  cidrs,
-		Timestamp:   time.Now().Unix(),
-		UDPNatType:  natType,
-		PeerRouteID: f.sessionID,
+		Origin:             f.localPeerID,
+		Version:            version,
+		Peers:              peers,
+		ProxyCIDRs:         cidrs,
+		Timestamp:          time.Now().Unix(),
+		UDPNatType:         natType,
+		PeerRouteID:        f.sessionID,
+		TrustedCredentials: proofs,
 	}
 	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return Advertisement{}, err

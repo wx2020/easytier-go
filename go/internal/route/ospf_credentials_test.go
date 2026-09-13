@@ -6,6 +6,9 @@ package route
 import (
 	"bytes"
 	"testing"
+	"time"
+
+	"github.com/EasyTier/EasyTier/go/internal/credential"
 
 	"google.golang.org/protobuf/proto"
 
@@ -116,5 +119,42 @@ func hexDigitValue(t *testing.T, c byte) byte {
 	default:
 		t.Fatalf("invalid hex digit %q", c)
 		return 0
+	}
+}
+
+// The flooder publishes the admin-signed trust list in every originated LSA.
+func TestFlooderPublishesTrustedCredentials(t *testing.T) {
+	var broadcastProofs []*peerrpc.TrustedCredentialPubkeyProof
+	flooder, err := NewFlooder(5, nil, func(ctx context.Context, a Advertisement, except uint32) error {
+		broadcastProofs = a.TrustedCredentials
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials := []credential.Credential{{
+		ID:           "cred-1",
+		PublicKey:    [32]byte{1},
+		RelayAllowed: true,
+		ExpiresAt:    time.Now().Add(time.Hour).Round(time.Second),
+	}}
+	proofs, err := SignManagedCredentials(credentials, "mesh-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flooder.SetTrustedCredentials(proofs)
+
+	advertised, err := flooder.Originate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(advertised.TrustedCredentials) != 1 {
+		t.Fatalf("originated proofs = %d, want 1", len(advertised.TrustedCredentials))
+	}
+	if len(broadcastProofs) != 1 {
+		t.Fatalf("broadcast proofs = %d, want 1", len(broadcastProofs))
+	}
+	if !VerifyTrustedCredentialProof(broadcastProofs[0], "mesh-secret") {
+		t.Fatal("published proof must verify under the network secret")
 	}
 }

@@ -12,9 +12,11 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -324,4 +326,28 @@ func writeUint32(buffer *bytes.Buffer, value uint32) {
 	var raw [4]byte
 	binary.BigEndian.PutUint32(raw[:], value)
 	buffer.Write(raw[:])
+}
+
+// LoadPublicCredentials reads a JSON file containing an array of credentials
+// (the same encoding produced by encoding/json on []Credential). Entries that
+// fail validation are skipped; the function errors only when the file cannot
+// be read or parsed. It is the loading path for --credential-file on admin
+// nodes that publish trusted credentials in their OSPF LSAs.
+func LoadPublicCredentials(path string) ([]Credential, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read credential file: %w", err)
+	}
+	var credentials []Credential
+	if err := json.Unmarshal(data, &credentials); err != nil {
+		return nil, fmt.Errorf("parse credential file: %w", err)
+	}
+	valid := make([]Credential, 0, len(credentials))
+	for _, credential := range credentials {
+		if err := credential.Validate(); err != nil {
+			continue
+		}
+		valid = append(valid, credential)
+	}
+	return valid, nil
 }

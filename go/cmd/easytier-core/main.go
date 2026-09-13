@@ -19,6 +19,7 @@ import (
 
 	"github.com/EasyTier/EasyTier/go/internal/config"
 	"github.com/EasyTier/EasyTier/go/internal/core"
+	"github.com/EasyTier/EasyTier/go/internal/credential"
 	"github.com/EasyTier/EasyTier/go/internal/instance"
 	"github.com/EasyTier/EasyTier/go/internal/logging"
 	"github.com/EasyTier/EasyTier/go/internal/management"
@@ -476,6 +477,15 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 		TUN:                   tunDevice,
 		TUNMTU:                tunMTU,
 		TUNDestination:        tunDestination,
+	}
+	// Admin nodes publish their trusted credentials in the OSPF LSA so
+	// credential peers are classified at connection level.
+	if cfg.CredentialFile != "" {
+		credentials, err := credential.LoadPublicCredentials(cfg.CredentialFile)
+		if err != nil {
+			return nil, err
+		}
+		opts.TrustedCredentials = credentials
 	}
 	if cfg.NetworkIdentity.NetworkName != "" {
 		opts.P2P = p2pConfigFrom(cfg)

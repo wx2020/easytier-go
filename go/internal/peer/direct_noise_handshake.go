@@ -4,6 +4,7 @@
 package peer
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -53,6 +54,9 @@ type DirectPeerHandshakeConfig struct {
 	StaticKeypair       noise.DHKey
 	PinnedRemoteStatic  []byte
 	CipherSuite         CipherSuite
+	// TrustedCredentialPubkeys lists remote static keys that authenticate as
+	// credential (unprivileged) peers instead of admins.
+	TrustedCredentialPubkeys [][]byte
 }
 
 // GenerateDirectPeerStaticKeypair creates a Curve25519 static keypair suitable
@@ -63,50 +67,50 @@ func GenerateDirectPeerStaticKeypair() (noise.DHKey, error) {
 
 // InitiateDirectPeerHandshake runs Noise_XX_25519_ChaChaPoly_SHA256 as the
 // initiator and returns a session configured for initiator-to-responder TX.
-func InitiateDirectPeerHandshake(ctx context.Context, channel PacketChannel, config DirectPeerHandshakeConfig) (*SecureDatagramSession, AuthenticationLevel, error) {
+func InitiateDirectPeerHandshake(ctx context.Context, channel PacketChannel, config DirectPeerHandshakeConfig) (*SecureDatagramSession, AuthenticationLevel, PeerIdentity, error) {
 	if err := config.validate(); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	handshake, err := newDirectNoiseHandshake(config, true)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	var initiatorID [directConnectionIDSize]byte
 	if _, err := io.ReadFull(rand.Reader, initiatorID[:]); err != nil {
-		return nil, 0, fmt.Errorf("generate initiator connection ID: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("generate initiator connection ID: %w", err)
 	}
 
 	message1, _, _, err := handshake.WriteMessage(nil, marshalDirectMsg1(config.NetworkName, initiatorID, config.CipherSuite))
 	if err != nil {
-		return nil, 0, fmt.Errorf("write Noise message 1: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("write Noise message 1: %w", err)
 	}
 	if err := sendDirectNoisePacket(ctx, channel, config.LocalPeerID, 0, protocol.PacketTypeNoiseHandshakeMsg1, message1); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	message1HandshakeHash := append([]byte(nil), handshake.ChannelBinding()...)
 
 	packet, err := receiveDirectNoisePacket(ctx, channel, protocol.PacketTypeNoiseHandshakeMsg2)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	if packet.Header.ToPeerID != config.LocalPeerID || packet.Header.FromPeerID == 0 {
-		return nil, 0, errors.New("Noise message 2 peer IDs are invalid")
+		return nil, 0, PeerIdentityUnknown, errors.New("Noise message 2 peer IDs are invalid")
 	}
 	message2, _, _, err := handshake.ReadMessage(nil, packet.Payload)
 	if err != nil {
-		return nil, 0, fmt.Errorf("read Noise message 2: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("read Noise message 2: %w", err)
 	}
 	if err := validatePinnedStatic(config.PinnedRemoteStatic, handshake.PeerStatic()); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	responderID, rootKey, epoch, responderProof, err := parseDirectMsg2(message2, config.NetworkName, initiatorID)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	if config.NetworkSecret != "" {
 		wantProof := networkProof(config.NetworkSecret, message1HandshakeHash)
 		if subtle.ConstantTimeCompare(responderProof[:], wantProof[:]) != 1 {
-			return nil, 0, errors.New("responder network secret proof does not match")
+			return nil, 0, PeerIdentityUnknown, errors.New("responder network secret proof does not match")
 		}
 	}
 
@@ -114,53 +118,61 @@ func InitiateDirectPeerHandshake(ctx context.Context, channel PacketChannel, con
 	message3Payload := marshalDirectMsg3WithDigest(initiatorID, responderID, proof[:], config.NetworkSecretDigest[:])
 	message3, _, _, err := handshake.WriteMessage(nil, message3Payload)
 	if err != nil {
-		return nil, 0, fmt.Errorf("write Noise message 3: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("write Noise message 3: %w", err)
 	}
 	if err := sendDirectNoisePacket(ctx, channel, config.LocalPeerID, packet.Header.FromPeerID, protocol.PacketTypeNoiseHandshakeMsg3, message3); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 
 	session, err := NewSecureDatagramSession(rootKey[:], config.CipherSuite, epoch, DirectionInitiatorToResponder, DirectionResponderToInitiator)
 	if err != nil {
-		return nil, 0, fmt.Errorf("create secure datagram session: %w", err)
+		return nil, 0, PeerIdentityUnknown, PeerIdentityUnknown, fmt.Errorf("create secure datagram session: %w", err)
 	}
+	level := directHandshakeLevel(config)
+	return session, level, classifyDirectPeerIdentity(config, level, handshake.PeerStatic()), nil
+}
+
+// directHandshakeLevel derives the authentication level implied by the
+// handshake configuration: a network secret proof outranks a static pin,
+// which outranks an unauthenticated Noise exchange.
+func directHandshakeLevel(config DirectPeerHandshakeConfig) AuthenticationLevel {
 	if config.NetworkSecret != "" {
-		return session, AuthenticationLevelNetworkSecret, nil
+		return AuthenticationLevelNetworkSecret
 	}
-	if len(config.PinnedRemoteStatic) == 0 {
-		return session, AuthenticationLevelNoiseStatic, nil
+	if len(config.PinnedRemoteStatic) != 0 {
+		return AuthenticationLevelPinnedStatic
 	}
-	return session, AuthenticationLevelPinnedStatic, nil
+	return AuthenticationLevelNoiseStatic
 }
 
 // RespondDirectPeerHandshake runs Noise_XX_25519_ChaChaPoly_SHA256 as the
 // responder and returns a session configured for responder-to-initiator TX.
-func RespondDirectPeerHandshake(ctx context.Context, channel PacketChannel, config DirectPeerHandshakeConfig) (*SecureDatagramSession, AuthenticationLevel, error) {
+func RespondDirectPeerHandshake(ctx context.Context, channel PacketChannel, config DirectPeerHandshakeConfig) (*SecureDatagramSession, AuthenticationLevel, PeerIdentity, error) {
 	if err := config.validate(); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	handshake, err := newDirectNoiseHandshake(config, false)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 
 	packet, err := receiveDirectNoisePacket(ctx, channel, protocol.PacketTypeNoiseHandshakeMsg1)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	if packet.Header.FromPeerID == 0 || packet.Header.ToPeerID != 0 {
-		return nil, 0, errors.New("Noise message 1 peer IDs are invalid")
+		return nil, 0, PeerIdentityUnknown, errors.New("Noise message 1 peer IDs are invalid")
 	}
 	message1, _, _, err := handshake.ReadMessage(nil, packet.Payload)
 	if err != nil {
-		return nil, 0, fmt.Errorf("read Noise message 1: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("read Noise message 1: %w", err)
 	}
 	initiatorID, suite, err := parseDirectMsg1(message1, config.NetworkName)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	if suite != config.CipherSuite {
-		return nil, 0, fmt.Errorf("requested cipher suite %d does not match %d", suite, config.CipherSuite)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("requested cipher suite %d does not match %d", suite, config.CipherSuite)
 	}
 	message1HandshakeHash := append([]byte(nil), handshake.ChannelBinding()...)
 
@@ -168,52 +180,95 @@ func RespondDirectPeerHandshake(ctx context.Context, channel PacketChannel, conf
 	var rootKey [directRootKeySize]byte
 	var epochBytes [4]byte
 	if _, err := io.ReadFull(rand.Reader, responderID[:]); err != nil {
-		return nil, 0, fmt.Errorf("generate responder connection ID: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("generate responder connection ID: %w", err)
 	}
 	if _, err := io.ReadFull(rand.Reader, rootKey[:]); err != nil {
-		return nil, 0, fmt.Errorf("generate root key: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("generate root key: %w", err)
 	}
 	if _, err := io.ReadFull(rand.Reader, epochBytes[:]); err != nil {
-		return nil, 0, fmt.Errorf("generate initial epoch: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("generate initial epoch: %w", err)
 	}
 	epoch := binary.BigEndian.Uint32(epochBytes[:])
 	message2, _, _, err := handshake.WriteMessage(nil, marshalDirectMsg2(config.NetworkName, responderID, initiatorID, rootKey, epoch, networkProof(config.NetworkSecret, message1HandshakeHash)))
 	if err != nil {
-		return nil, 0, fmt.Errorf("write Noise message 2: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("write Noise message 2: %w", err)
 	}
 	if err := sendDirectNoisePacket(ctx, channel, config.LocalPeerID, packet.Header.FromPeerID, protocol.PacketTypeNoiseHandshakeMsg2, message2); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 
 	packet, err = receiveDirectNoisePacket(ctx, channel, protocol.PacketTypeNoiseHandshakeMsg3)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	if packet.Header.FromPeerID == 0 || packet.Header.ToPeerID != config.LocalPeerID {
-		return nil, 0, errors.New("Noise message 3 peer IDs are invalid")
+		return nil, 0, PeerIdentityUnknown, errors.New("Noise message 3 peer IDs are invalid")
 	}
 	handshakeHash := append([]byte(nil), handshake.ChannelBinding()...)
 	message3, _, _, err := handshake.ReadMessage(nil, packet.Payload)
 	if err != nil {
-		return nil, 0, fmt.Errorf("read Noise message 3: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("read Noise message 3: %w", err)
 	}
 	if err := validatePinnedStatic(config.PinnedRemoteStatic, handshake.PeerStatic()); err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	proof, err := parseDirectMsg3(message3, initiatorID, responderID)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, PeerIdentityUnknown, err
 	}
 	wantProof := networkProof(config.NetworkSecret, handshakeHash)
 	if config.NetworkSecret != "" && subtle.ConstantTimeCompare(proof[:], wantProof[:]) != 1 {
-		return nil, 0, errors.New("network secret proof does not match")
+		return nil, 0, PeerIdentityUnknown, errors.New("network secret proof does not match")
 	}
 
 	session, err := NewSecureDatagramSession(rootKey[:], suite, epoch, DirectionResponderToInitiator, DirectionInitiatorToResponder)
 	if err != nil {
-		return nil, 0, fmt.Errorf("create secure datagram session: %w", err)
+		return nil, 0, PeerIdentityUnknown, fmt.Errorf("create secure datagram session: %w", err)
 	}
-	return session, AuthenticationLevelNetworkSecret, nil
+	level := directHandshakeLevel(config)
+	return session, level, classifyDirectPeerIdentity(config, level, handshake.PeerStatic()), nil
+}
+
+// PeerIdentity classifies the remote role observed at connection level,
+// mirroring the reference PeerIdentityType: admins proved the network
+// secret, credential peers authenticated a trusted credential key.
+type PeerIdentity uint8
+
+const (
+	// PeerIdentityUnknown means the connection carried no identity claim.
+	PeerIdentityUnknown PeerIdentity = iota
+	// PeerIdentityAdmin means the peer proved possession of the network
+	// secret (or a key the admin explicitly pinned).
+	PeerIdentityAdmin
+	// PeerIdentityCredential means the peer authenticated a static key that
+	// the admin listed as a trusted credential.
+	PeerIdentityCredential
+)
+
+// classifyDirectPeerIdentity applies the reference auth matrix: a trusted
+// credential key makes the remote a credential peer; a secret proof or an
+// admin-pinned key makes it an admin; anything else stays unknown.
+func classifyDirectPeerIdentity(config DirectPeerHandshakeConfig, level AuthenticationLevel, peerStatic []byte) PeerIdentity {
+	if config.hasTrustedCredentialPubkey(peerStatic) {
+		return PeerIdentityCredential
+	}
+	switch level {
+	case AuthenticationLevelNetworkSecret, AuthenticationLevelPinnedStatic:
+		return PeerIdentityAdmin
+	default:
+		return PeerIdentityUnknown
+	}
+}
+
+// hasTrustedCredentialPubkey reports whether the remote static key is one of
+// the configured credential keys.
+func (c DirectPeerHandshakeConfig) hasTrustedCredentialPubkey(peerStatic []byte) bool {
+	for _, trusted := range c.TrustedCredentialPubkeys {
+		if len(trusted) != 0 && bytes.Equal(trusted, peerStatic) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c DirectPeerHandshakeConfig) validate() error {

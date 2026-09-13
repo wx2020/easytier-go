@@ -22,10 +22,10 @@ func TestDirectPeerHandshakeRoundTrip(t *testing.T) {
 
 	serverResult := make(chan handshakeResult, 1)
 	go func() {
-		session, level, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
-		serverResult <- handshakeResult{session, level, err}
+		session, level, identity, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
+		serverResult <- handshakeResult{session: session, level: level, identity: identity, err: err}
 	}()
-	clientSession, clientLevel, err := InitiateDirectPeerHandshake(ctx, client, clientConfig)
+	clientSession, clientLevel, identity, err := InitiateDirectPeerHandshake(ctx, client, clientConfig)
 	if err != nil {
 		select {
 		case serverErr := <-serverResult:
@@ -53,10 +53,10 @@ func TestDirectPeerHandshakeRejectsWrongDigestProof(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
+		_, _, _, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
 		result <- err
 	}()
-	if _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
+	if _, _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
 		t.Fatal("expected responder proof rejection")
 	}
 	if err := <-result; err == nil {
@@ -73,7 +73,7 @@ func TestDirectPeerHandshakeRejectsWrongConnectionEcho(t *testing.T) {
 	go func() {
 		result <- sendWrongConnectionEcho(ctx, server, serverConfig)
 	}()
-	if _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
+	if _, _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
 		t.Fatal("expected connection echo rejection")
 	}
 	if err := <-result; err != nil {
@@ -91,8 +91,8 @@ func TestDirectPeerHandshakeRejectsPinnedStaticMismatch(t *testing.T) {
 	clientConfig.PinnedRemoteStatic = other.Public
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	go func() { _, _, _ = RespondDirectPeerHandshake(ctx, server, serverConfig) }()
-	if _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
+	go func() { _, _, _, _ = RespondDirectPeerHandshake(ctx, server, serverConfig) }()
+	if _, _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
 		t.Fatal("expected pinned static rejection")
 	}
 }
@@ -103,10 +103,10 @@ func TestDirectPeerHandshakeRejectsTamperedNoisePacket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := RespondDirectPeerHandshake(ctx, tamperingPacketChannel{PacketChannel: server, packetType: protocol.PacketTypeNoiseHandshakeMsg2}, serverConfig)
+		_, _, _, err := RespondDirectPeerHandshake(ctx, tamperingPacketChannel{PacketChannel: server, packetType: protocol.PacketTypeNoiseHandshakeMsg2}, serverConfig)
 		result <- err
 	}()
-	if _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
+	if _, _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig); err == nil {
 		t.Fatal("expected tampered Noise packet rejection")
 	}
 	cancel()
@@ -137,15 +137,15 @@ func TestDirectPeerHandshakeOverTCP(t *testing.T) {
 			return
 		}
 		defer channel.Close()
-		session, level, err := RespondDirectPeerHandshake(ctx, channel, serverConfig)
-		serverResult <- handshakeResult{session: session, level: level, err: err}
+		session, level, identity, err := RespondDirectPeerHandshake(ctx, channel, serverConfig)
+		serverResult <- handshakeResult{session: session, level: level, identity: identity, err: err}
 	}()
 	channel, err := transport.DialTCP(ctx, listener.Addr().String(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer channel.Close()
-	clientSession, _, err := InitiateDirectPeerHandshake(ctx, channel, clientConfig)
+	clientSession, _, _, err := InitiateDirectPeerHandshake(ctx, channel, clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,10 +183,10 @@ func TestDirectPeerHandshakeOverUDP(t *testing.T) {
 
 	serverResult := make(chan handshakeResult, 1)
 	go func() {
-		session, level, err := RespondDirectPeerHandshake(ctx, serverChannel, serverConfig)
-		serverResult <- handshakeResult{session: session, level: level, err: err}
+		session, level, identity, err := RespondDirectPeerHandshake(ctx, serverChannel, serverConfig)
+		serverResult <- handshakeResult{session: session, level: level, identity: identity, err: err}
 	}()
-	clientSession, _, err := InitiateDirectPeerHandshake(ctx, clientChannel, clientConfig)
+	clientSession, _, _, err := InitiateDirectPeerHandshake(ctx, clientChannel, clientConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,9 +202,10 @@ func TestDirectPeerHandshakeOverUDP(t *testing.T) {
 }
 
 type handshakeResult struct {
-	session *SecureDatagramSession
-	level   AuthenticationLevel
-	err     error
+	session  *SecureDatagramSession
+	level    AuthenticationLevel
+	identity PeerIdentity
+	err      error
 }
 
 func testDirectHandshakeConfigs(t *testing.T) (DirectPeerHandshakeConfig, DirectPeerHandshakeConfig) {
@@ -283,4 +284,52 @@ func (c tamperingPacketChannel) Send(ctx context.Context, packet protocol.Packet
 		packet.Payload[len(packet.Payload)-1] ^= 1
 	}
 	return c.PacketChannel.Send(ctx, packet)
+}
+
+// A credential client authenticates with its own static key: the admin
+// responder classifies it as a credential peer when the key is in the
+// configured trust list, while the client cannot confirm the admin.
+func TestDirectPeerHandshakeClassifiesCredentialPeer(t *testing.T) {
+	client, server := newPacketPair()
+	clientStatic, err := GenerateDirectPeerStaticKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverStatic, err := GenerateDirectPeerStaticKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig := DirectPeerHandshakeConfig{
+		LocalPeerID: 11, NetworkName: "mesh", NetworkSecretDigest: [NetworkSecretDigestSize]byte{7},
+		StaticKeypair: clientStatic, CipherSuite: CipherSuiteChaCha20Poly1305,
+	}
+	serverConfig := DirectPeerHandshakeConfig{
+		LocalPeerID: 22, NetworkName: "mesh", NetworkSecret: "test-secret",
+		StaticKeypair: serverStatic, CipherSuite: CipherSuiteChaCha20Poly1305,
+		TrustedCredentialPubkeys: [][]byte{clientStatic.Public[:]},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	serverResult := make(chan handshakeResult, 1)
+	go func() {
+		session, level, identity, err := RespondDirectPeerHandshake(ctx, server, serverConfig)
+		serverResult <- handshakeResult{session: session, level: level, identity: identity, err: err}
+	}()
+	clientSession, _, _, err := InitiateDirectPeerHandshake(ctx, client, clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = clientSession
+	responder := <-serverResult
+	if responder.err != nil {
+		t.Fatal(responder.err)
+	}
+	if responder.session == nil {
+		t.Fatal("responder session is nil")
+	}
+	// The admin responder classifies the credential client.
+	if responder.identity != PeerIdentityCredential {
+		t.Fatalf("responder sees client identity = %v, want credential", responder.identity)
+	}
 }

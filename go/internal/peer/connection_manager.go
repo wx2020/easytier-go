@@ -69,6 +69,7 @@ type PeerSession struct {
 	Channel             PacketChannel
 	Router              *PacketRouter
 	Secure              *SecureDatagramSession
+	Identity            PeerIdentity
 	Legacy              LegacyCipher
 	AuthenticationLevel AuthenticationLevel
 	DataCompressAlgo    protocol.CompressionAlgorithm
@@ -346,24 +347,29 @@ func (m *PeerConnectionManager) handleConnection(ctx context.Context, channel Pa
 		level        AuthenticationLevel
 		err          error
 	)
+	var identity PeerIdentity
 	if m.mode == HandshakeModeDirectNoise {
 		if initiator {
-			secure, level, err = InitiateDirectPeerHandshake(operationContext, tracked, m.direct)
+			secure, level, identity, err = InitiateDirectPeerHandshake(operationContext, tracked, m.direct)
 		} else {
-			secure, level, err = RespondDirectPeerHandshake(operationContext, tracked, m.direct)
+			secure, level, identity, err = RespondDirectPeerHandshake(operationContext, tracked, m.direct)
 		}
 		remotePeerID = tracked.remotePeerID()
-	} else if initiator {
-		var response protocol.HandshakeRequest
-		response, err = InitiateLegacyHandshake(operationContext, tracked, m.legacy)
-		remotePeerID = response.MyPeerID
 	} else {
-		var packet protocol.Packet
-		packet, err = tracked.Receive(operationContext)
-		if err == nil {
-			var request protocol.HandshakeRequest
-			request, err = RespondLegacyHandshake(operationContext, tracked, m.legacy, packet)
-			remotePeerID = request.MyPeerID
+		// Legacy peers prove the network secret digest, so they are admins.
+		identity = PeerIdentityAdmin
+		if initiator {
+			var response protocol.HandshakeRequest
+			response, err = InitiateLegacyHandshake(operationContext, tracked, m.legacy)
+			remotePeerID = response.MyPeerID
+		} else {
+			var packet protocol.Packet
+			packet, err = tracked.Receive(operationContext)
+			if err == nil {
+				var request protocol.HandshakeRequest
+				request, err = RespondLegacyHandshake(operationContext, tracked, m.legacy, packet)
+				remotePeerID = request.MyPeerID
+			}
 		}
 	}
 	if err != nil {
@@ -377,6 +383,7 @@ func (m *PeerConnectionManager) handleConnection(ctx context.Context, channel Pa
 		Channel:             channel,
 		Router:              m.router,
 		Secure:              secure,
+		Identity:            identity,
 		Legacy:              m.legacyCipher,
 		AuthenticationLevel: level,
 		DataCompressAlgo:    m.dataCompressAlgo,
@@ -567,6 +574,18 @@ func (m *PeerConnectionManager) allowDataPacket(packet protocol.Packet) bool {
 	m.addStat("peer_data_received", 1)
 	m.addStat("peer_bytes_received", uint64(len(packet.Payload)))
 	return true
+}
+
+// IdentityOf returns the connection-level identity of the session to peerID.
+// It reports false when the peer is not connected.
+func (m *PeerConnectionManager) IdentityOf(peerID uint32) (PeerIdentity, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	session, ok := m.peers[peerID]
+	if !ok || session == nil {
+		return PeerIdentityUnknown, false
+	}
+	return session.Identity, true
 }
 
 func (m *PeerConnectionManager) addStat(name string, value uint64) {

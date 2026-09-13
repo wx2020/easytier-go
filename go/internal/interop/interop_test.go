@@ -564,7 +564,7 @@ func testTCPNoise(t *testing.T, direction string) {
 			return
 		}
 		defer ch.Close()
-		sess, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
+		sess, _, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
 		if err != nil {
 			serverResult <- err
 			return
@@ -602,7 +602,7 @@ func testTCPNoise(t *testing.T, direction string) {
 		t.Fatal(err)
 	}
 	defer ch.Close()
-	clientSess, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
+	clientSess, _, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,7 +656,7 @@ func testUDPNoise(t *testing.T, direction string) {
 			return
 		}
 		defer sess.Close()
-		serverSess, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		serverSess, _, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
 		if err != nil {
 			serverDone <- err
 			return
@@ -691,7 +691,7 @@ func testUDPNoise(t *testing.T, direction string) {
 		t.Fatal(err)
 	}
 	defer clientSess.Close()
-	clientSec, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
+	clientSec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +743,7 @@ func testWSNoise(t *testing.T, direction string) {
 			return
 		}
 		defer ch.Close()
-		sess, _, err := peer.RespondDirectPeerHandshake(context.Background(), ch, serverCfg)
+		sess, _, _, err := peer.RespondDirectPeerHandshake(context.Background(), ch, serverCfg)
 		if err != nil {
 			serverDone <- err
 			return
@@ -776,7 +776,7 @@ func testWSNoise(t *testing.T, direction string) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	clientSess, _, err := peer.InitiateDirectPeerHandshake(ctx, client, clientCfg)
+	clientSess, _, _, err := peer.InitiateDirectPeerHandshake(ctx, client, clientCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1255,7 +1255,7 @@ func testWGNoise(t *testing.T, direction string) {
 			return
 		}
 		defer sess.Close()
-		serverSess, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		serverSess, _, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
 		if err != nil {
 			serverDone <- err
 			return
@@ -1290,7 +1290,7 @@ func testWGNoise(t *testing.T, direction string) {
 		t.Fatal(err)
 	}
 	defer clientSess.Close()
-	clientSec, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
+	clientSec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1343,7 +1343,7 @@ func testQUICNoise(t *testing.T, direction string) {
 			return
 		}
 		defer sess.Close()
-		serverSess, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		serverSess, _, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
 		if err != nil {
 			serverDone <- err
 			return
@@ -1378,7 +1378,7 @@ func testQUICNoise(t *testing.T, direction string) {
 		t.Fatal(err)
 	}
 	defer clientSess.Close()
-	clientSec, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
+	clientSec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, clientSess, clientCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2162,7 +2162,7 @@ func tryRustTCPNoiseGoToRust(t *testing.T, bin string) bool {
 		return false
 	}
 	defer ch.Close()
-	sess, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
+	sess, _, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
 	if err != nil {
 		t.Logf("Go→Rust Noise handshake failed: %v (fallback)", err)
 		return false
@@ -2230,7 +2230,7 @@ func tryRustTCPNoiseRustToGo(t *testing.T, bin string) bool {
 		defer ch.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		sess, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
+		sess, _, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
 		if err != nil {
 			serverDone <- fmt.Errorf("respond handshake: %w", err)
 			return
@@ -2293,7 +2293,7 @@ func tryRustUDPNoiseGoToRust(t *testing.T, bin string) bool {
 		return false
 	}
 	defer sess.Close()
-	sec, _, err := peer.InitiateDirectPeerHandshake(ctx, sess, clientCfg)
+	sec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, sess, clientCfg)
 	if err != nil {
 		t.Logf("Go→Rust UDP Noise handshake failed: %v (fallback)", err)
 		return false
@@ -2356,7 +2356,7 @@ func tryRustUDPNoiseRustToGo(t *testing.T, bin string) bool {
 			return
 		}
 		defer sess.Close()
-		sec, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		sec, _, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
 		if err != nil {
 			serverDone <- fmt.Errorf("respond handshake: %w", err)
 			return
@@ -2422,7 +2422,7 @@ func tryRustWSNoiseGoToRust(t *testing.T, bin string) bool {
 		return false
 	}
 	defer ch.Close()
-	sess, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
+	sess, _, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
 	if err != nil {
 		t.Logf("Go→Rust WS Noise handshake failed: %v (fallback)", err)
 		return false
@@ -2487,7 +2487,7 @@ func tryRustWSNoiseRustToGo(t *testing.T, bin string) bool {
 			return
 		}
 		defer ch.Close()
-		sess, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
+		sess, _, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
 		if err != nil {
 			serverDone <- fmt.Errorf("respond handshake: %w", err)
 			return
