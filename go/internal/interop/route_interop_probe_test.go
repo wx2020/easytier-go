@@ -89,9 +89,19 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	go func() { serveResult <- node.Serve(ctx) }()
 
 	deadline := time.Now().Add(25 * time.Second)
+	var ospf *route.Flooder
+	for time.Now().Before(deadline) {
+		if ospf = node.OSPF(); ospf != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if ospf == nil {
+		t.Fatal("OSPF flooder did not start")
+	}
 	learned := false
 	for time.Now().Before(deadline) {
-		for _, rt := range node.OSPF().Routes() {
+		for _, rt := range ospf.Routes() {
 			if rt.Destination != 77 && rt.NextHop != 0 {
 				learned = true
 			}
@@ -105,7 +115,7 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	t.Logf("final toRust=%d fromRust=%d", toRust.Load(), fromRust.Load())
 
-	if _, err := node.OSPF().Originate(context.Background()); err != nil {
+	if _, err := ospf.Originate(context.Background()); err != nil {
 		t.Logf("explicit originate error: %v", err)
 	}
 	time.Sleep(5 * time.Second)
