@@ -2576,6 +2576,8 @@ func spawnRustWithExtra(t *testing.T, bin, network, secret string, listeners, pe
 	t.Logf("spawning Rust (secure): %s %s", bin, strings.Join(args, " "))
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = tmpDir
+	// Debug logging from the oracle is essential for interop diagnosis.
+	cmd.Env = append(os.Environ(), "RUST_LOG=debug")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
