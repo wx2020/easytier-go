@@ -302,6 +302,9 @@ func (f *Flooder) loop() {
 	f.mu.Unlock()
 	ticker := time.NewTicker(floodInterval)
 	defer ticker.Stop()
+	// Originate immediately, mirroring the reference session_task which
+	// syncs on start instead of waiting a full interval.
+	_, _ = f.Originate(ctx)
 	for {
 		select {
 		case <-ticker.C:

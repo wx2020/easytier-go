@@ -52,6 +52,9 @@ func TestInteropRouteDissemination(t *testing.T) {
 		PeerManager: peer.PeerConnectionManagerConfig{
 			LocalPeerID:    identity.PeerID,
 			LegacyIdentity: identity,
+			// Keepalive traffic keeps the oracle from pruning the
+			// connection as idle before the LSA exchange completes.
+			PingerEnabled: true,
 		},
 		Peers:                 []string{"tcp://" + rustAddr},
 		PeerCenterNetworkName: network,
