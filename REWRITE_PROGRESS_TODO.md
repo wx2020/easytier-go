@@ -337,3 +337,23 @@ git push origin <branch>          # 触发 go.yml + interop.yml
 gh run watch -R wx2020/easytier-go <run-id>
 gh run view -R wx2020/easytier-go <run-id> --log-failed
 ```
+
+### 2.0e 第八轮：路由互通深水区诊断（2026-09-18）
+
+26. **深层互通 cell 首次实做**：`TestInteropRouteDissemination` 真正驱动 Rust 2.6.4
+    oracle 参与网格（Go 节点拨 oracle、双向验证路由学习、oracle CLI 查 route 表）；
+    另附 `TestInteropRouteProxyDiagnosis` 帧计数代理探针（按 [4B len][16B PM header]
+    分帧统计 packet_type）+ oracle RUST_LOG=debug。
+27. **诊断发现（当前阻塞点）**：
+    - Go 侧 OSPF 线协议与 oracle 完全兼容的**半边已验证**：Go 能解析并处理 oracle 的
+      SyncRouteInfo（学到真实 LSA）。
+    - 反向（Go→oracle）字节到达 oracle 的 TCP socket（代理计数 type8=5/type9=3），
+      但 oracle 的 peer_conn 只消费了第一帧（握手，rx_packets=1），随后发送侧死亡
+      （`peer conn send ctrl resp error SendError`），其自身 sync 永远发不出
+      （session rpc_tx_count=0、client 全部 Timeout）。
+    - oracle 侧另有 `WaitRespError(conn closed during wait handshake response)`
+      —— 第二条连接的握手未完成即关闭。
+    - 结论：阻塞点在**跨实现连接生命周期**（Go 重连行为 × oracle 连接断开时序 ×
+      双向 legacy 握手协议），需双侧包级 trace 的专项会话；非单点 bug。
+28. 两测试暂以 `routeInteropSkip` 跳过（skip 消息含完整诊断），探针保留为诊断资产；
+    矩阵其余 64 cell 保持绿色。
