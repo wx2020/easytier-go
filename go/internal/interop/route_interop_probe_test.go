@@ -114,14 +114,12 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Logf("learned=%v toRust=%d fromRust=%d", learned, toRust.Load(), fromRust.Load())
 	time.Sleep(5 * time.Second)
 
 	if _, err := ospf.Originate(context.Background()); err != nil {
 		t.Logf("explicit originate error: %v", err)
 	}
 	time.Sleep(5 * time.Second)
-	t.Logf("after originate toRust=%d fromRust=%d", toRust.Load(), fromRust.Load())
 
 	out, _ := exec.Command(cliBin, "-p", rpcPortalOf(t, cmd), "route", "list").CombinedOutput()
 
