@@ -25,7 +25,7 @@ import (
 
 const (
 	// floodInterval is the periodic re-announce period for local LSAs.
-	floodInterval = 30 * time.Second
+	floodInterval = 10 * time.Second
 	// floodMaxAge expires origins that stop refreshing.
 	floodMaxAge = 5 * time.Minute
 	// floodMaxPeers bounds one originated advertisement.
