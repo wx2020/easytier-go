@@ -9,12 +9,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,4 +133,69 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	// Always fail with the diagnosis data: t.Logf is invisible without -v.
 	t.Errorf("PROXY DIAGNOSIS %s", diagnosis)
 	_ = route.OSPFRouteProtoName
+}
+
+// frameCounters tallies EasyTier peer packets by packet type in one proxy
+// direction. The stream is [4-byte LE length][16-byte peer header][body].
+type frameCounters struct {
+	mu    sync.Mutex
+	types map[uint8]int
+	bytes int64
+}
+
+func (f *frameCounters) record(packetType uint8, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.types[packetType]++
+	f.bytes += int64(n)
+}
+
+func (f *frameCounters) snapshot() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := make([]int, 0, len(f.types))
+	for k := range f.types {
+		keys = append(keys, int(k))
+	}
+	sort.Ints(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("type%d=%d", k, f.types[uint8(k)]))
+	}
+	return fmt.Sprintf("bytes=%d [%s]", f.bytes, strings.Join(parts, " "))
+}
+
+// pumpFrames relays src to dst while counting packets by peer header type.
+func pumpFrames(dst, src net.Conn, counters *frameCounters) {
+	defer dst.Close()
+	pending := make([]byte, 0, 4+protocol.PeerManagerHeaderSize)
+	buf := make([]byte, 16<<10)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			pending = append(pending, buf[:n]...)
+			for {
+				if len(pending) < 4 {
+					break
+				}
+				frameLen := int(binary.LittleEndian.Uint32(pending[:4]))
+				if frameLen < protocol.PeerManagerHeaderSize || frameLen > 1<<20 {
+					counters.record(0, len(pending))
+					pending = pending[:0]
+					break
+				}
+				if len(pending) < 4+frameLen {
+					break
+				}
+				counters.record(pending[4+8], 4+frameLen)
+				pending = pending[4+frameLen:]
+			}
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
