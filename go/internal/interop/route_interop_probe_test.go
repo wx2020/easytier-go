@@ -7,6 +7,7 @@ package interop
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
