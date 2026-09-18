@@ -113,7 +113,7 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	}
 	t.Logf("learned=%v toRust=%d fromRust=%d", learned, toRust.Load(), fromRust.Load())
 	time.Sleep(5 * time.Second)
-	t.Logf("final toRust=%d fromRust=%d", toRust.Load(), fromRust.Load())
+	toRustInitial, fromRustInitial := toRust.Load(), fromRust.Load()
 
 	if _, err := ospf.Originate(context.Background()); err != nil {
 		t.Logf("explicit originate error: %v", err)
@@ -122,11 +122,14 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	t.Logf("after originate toRust=%d fromRust=%d", toRust.Load(), fromRust.Load())
 
 	out, _ := exec.Command(cliBin, "-p", rpcPortalOf(t, cmd), "route", "list").CombinedOutput()
-	t.Logf("oracle route list: %s", strings.TrimSpace(string(out)))
 
+	diagnosis := fmt.Sprintf("learned=%v toRust=%d fromRust=%d afterOriginate toRust=%d fromRust=%d oracleRoutes=%s",
+		learned, toRustInitial, fromRustInitial, toRust.Load(), fromRust.Load(), strings.TrimSpace(string(out)))
 	_ = node.Close()
 	cancel()
 	<-serveResult
+	// Always fail with the diagnosis data: t.Logf is invisible without -v.
+	t.Errorf("PROXY DIAGNOSIS %s", diagnosis)
 	_ = route.OSPFRouteProtoName
 }
 
