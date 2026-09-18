@@ -7,13 +7,14 @@ package interop
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,7 +50,8 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer proxy.Close()
-	var toRust, fromRust atomic.Int64
+	toRustFrames := &frameCounters{types: make(map[uint8]int)}
+	fromRustFrames := &frameCounters{types: make(map[uint8]int)}
 	go func() {
 		for {
 			down, err := proxy.Accept()
@@ -61,8 +63,8 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 				_ = down.Close()
 				continue
 			}
-			go pumpCounting(down, up, &toRust)
-			go pumpCounting(up, down, &fromRust)
+			go pumpFrames(down, up, toRustFrames)
+			go pumpFrames(up, down, fromRustFrames)
 		}
 	}()
 
@@ -114,7 +116,6 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 	}
 	t.Logf("learned=%v toRust=%d fromRust=%d", learned, toRust.Load(), fromRust.Load())
 	time.Sleep(5 * time.Second)
-	toRustInitial, fromRustInitial := toRust.Load(), fromRust.Load()
 
 	if _, err := ospf.Originate(context.Background()); err != nil {
 		t.Logf("explicit originate error: %v", err)
@@ -124,32 +125,12 @@ func TestInteropRouteProxyDiagnosis(t *testing.T) {
 
 	out, _ := exec.Command(cliBin, "-p", rpcPortalOf(t, cmd), "route", "list").CombinedOutput()
 
-	diagnosis := fmt.Sprintf("learned=%v toRust=%d fromRust=%d afterOriginate toRust=%d fromRust=%d oracleRoutes=%s",
-		learned, toRustInitial, fromRustInitial, toRust.Load(), fromRust.Load(), strings.TrimSpace(string(out)))
+	diagnosis := fmt.Sprintf("learned=%v goFrames=%s rustFrames=%s oracleRoutes=%s",
+		learned, toRustFrames.snapshot(), fromRustFrames.snapshot(), strings.TrimSpace(string(out)))
 	_ = node.Close()
 	cancel()
 	<-serveResult
 	// Always fail with the diagnosis data: t.Logf is invisible without -v.
 	t.Errorf("PROXY DIAGNOSIS %s", diagnosis)
 	_ = route.OSPFRouteProtoName
-}
-
-func pumpCounting(dst, src net.Conn, counter *atomic.Int64) {
-	defer dst.Close()
-	buf := make([]byte, 16<<10)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			counter.Add(int64(n))
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return
-			}
-		}
-		if err != nil {
-			if err != io.EOF {
-				return
-			}
-			return
-		}
-	}
 }
