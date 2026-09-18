@@ -184,7 +184,6 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 	if f.natTypeFn != nil {
 		natType = f.natTypeFn()
 	}
-	f.mu.Unlock()
 	var proofs []*peerrpc.TrustedCredentialPubkeyProof
 	proofs = append(proofs, f.trustedCredentials...)
 	f.mu.Unlock()
