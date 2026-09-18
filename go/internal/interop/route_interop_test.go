@@ -101,6 +101,16 @@ func TestInteropRouteDissemination(t *testing.T) {
 	}
 	t.Logf("Go learned routes from Rust: %+v", ospf.Routes())
 
+	// Force one originate and surface the broadcast error: the periodic
+	// loop swallows originate failures, so the reverse direction (Go LSA
+	// reaching the oracle) needs an explicit probe.
+	ctxOriginate, cancelOriginate := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelOriginate()
+	if _, err := ospf.Originate(ctxOriginate); err != nil {
+		t.Fatalf("explicit originate failed: %v", err)
+	}
+	t.Logf("explicit originate broadcast completed")
+
 	// Rust side: the oracle CLI must list the Go peer (77) in its route
 	// table. The CLI reads the RPC portal; find it from the process args.
 	rustPeerSeen := false
