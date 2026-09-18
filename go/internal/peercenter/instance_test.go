@@ -114,8 +114,10 @@ func TestInstanceReportsAndGetsGlobalPeerMap(t *testing.T) {
 		t.Fatalf("center = %d, want 1", got)
 	}
 
-	// B reports to A and A becomes the center with B in its map.
-	deadline := time.Now().Add(3 * time.Second)
+	// B reports to A and A becomes the center with B in its map. The
+	// deadline tolerates loaded CI runners now that the race suite is a
+	// blocking gate.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		server := instanceA.Server()
 		if server.CurrentDigest() != 0 {

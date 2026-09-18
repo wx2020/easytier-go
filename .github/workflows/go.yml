@@ -43,11 +43,11 @@ jobs:
         run: go vet ./...
       - name: Build native binaries
         run: go build ./cmd/easytier-core ./cmd/easytier-cli
-      # Phase gate: the build must pass. Tests stay informative (no race
-      # detector, non-blocking) until the rewrite stabilizes.
-      - name: Test (informational)
-        continue-on-error: true
-        run: go test ./...
+      # P4 gate: the race-enabled unit suite is blocking (SE §8.1); the
+      # previously flaky suites (WG session surfacing, peer-center digest)
+      # are fixed and covered by golden vectors.
+      - name: Test with race detector
+        run: go test -race ./...
 
   cross-build:
     needs: check

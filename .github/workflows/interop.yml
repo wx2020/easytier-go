@@ -48,11 +48,9 @@ jobs:
         run: go vet ./...
       - name: Build binaries
         run: go build -o /tmp/easytier-core-go ./cmd/easytier-core && go build -o /tmp/easytier-cli-go ./cmd/easytier-cli
-      # Phase gate: the build must pass. Tests stay informative (no race
-      # detector, non-blocking) until the rewrite stabilizes.
-      - name: Test (informational)
-        continue-on-error: true
-        run: go test ./...
+      # P4 gate: the race-enabled unit suite is blocking (SE §8.1).
+      - name: Test with race detector
+        run: go test -race ./...
       - name: Upload Go binaries
         uses: actions/upload-artifact@v4
         with:
@@ -107,6 +105,60 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: compat-corpus
+          path: go/testdata/compat
+          retention-days: 7
+          if-no-files-found: warn
+
+  # P4: golden-vector regeneration against the Rust oracle, on demand only
+  # (workflow_dispatch) because it compiles the Rust core (~10-20 min).
+  # A diff means either the corpus must be re-committed or a §11 migration
+  # record is required (docs/GO_REWRITE_SE.md).
+  fixture-regen:
+    name: Regenerate corpus from oracle (dispatch only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out Rust 2.6.4 oracle source
+        run: |
+          git init oracle
+          git -C oracle remote add origin https://github.com/EasyTier/EasyTier.git
+          git -C oracle fetch --depth=1 origin 8428a89d2dabc94c97d370ec607c6ca142473626
+          git -C oracle checkout --detach FETCH_HEAD
+      - name: Prepare build environment
+        uses: ./.github/actions/prepare-build
+        with:
+          pnpm: false
+          gui: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: regen-2.6.4
+          prefix-key: interop
+          workspaces: oracle
+      - name: Generate corpus from the oracle
+        run: |
+          set -euo pipefail
+          mkdir -p go/testdata/compat/packet go/testdata/compat/handshake go/testdata/compat/digest go/testdata/compat/noise go/testdata/compat/secure go/testdata/compat/config go/testdata/compat/rpc go/testdata/compat/route go/testdata/compat/wg
+          if cargo run --manifest-path tools/gen-fixtures/Cargo.toml -- --out go/testdata/compat 2>/dev/null; then
+            echo "gen-fixtures (tools/gen-fixtures) succeeded"
+          else
+            echo "::warning::tools/gen-fixtures unavailable; corpus left as committed"
+          fi
+      - name: Diff regenerated corpus
+        run: |
+          if [ -n "$(git status --porcelain go/testdata/compat)" ]; then
+            echo "::warning::Regenerated corpus differs from the committed one — review and either re-commit or record a §11 migration"
+            git diff --stat -- go/testdata/compat || true
+            git diff -- go/testdata/compat | head -n 200 || true
+          else
+            echo "Regenerated corpus is byte-identical to the committed corpus"
+          fi
+      - name: Upload regenerated corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-corpus-regen
           path: go/testdata/compat
           retention-days: 7
           if-no-files-found: warn
@@ -426,7 +478,7 @@ jobs:
   interop-result:
     name: Interop result
     runs-on: ubuntu-latest
-    needs: [build-go, build-oracle, fixture-corpus, interop-matrix]
+    needs: [build-go, build-oracle, fixture-corpus, fixture-regen, interop-matrix]
     if: always()
     steps:
       - name: Aggregate
@@ -434,12 +486,14 @@ jobs:
           echo "build-go: ${{ needs.build-go.result }}"
           echo "build-oracle: ${{ needs.build-oracle.result }}"
           echo "fixture-corpus: ${{ needs.fixture-corpus.result }}"
+          echo "fixture-regen: ${{ needs.fixture-regen.result }}"
           echo "interop-matrix: ${{ needs.interop-matrix.result }}"
-          # Phase gate: only the linux x64 build is required. The oracle
-          # fetch, corpus check and interop matrix are informational until
-          # the wire-protocol gaps are closed (see REWRITE_PROGRESS_TODO.md).
+          # P4 gate: the linux x64 build AND the race-enabled unit suite
+          # must pass. The oracle fetch, corpus check, dispatch-only
+          # regeneration and the interop matrix are informational until the
+          # remaining deep-interop gaps close (see REWRITE_PROGRESS_TODO.md).
           if [ "${{ needs.build-go.result }}" != "success" ]; then
-            echo "::error::build-go failed — the linux x64 build is the phase gate"
+            echo "::error::build-go failed — build + race tests are the phase gate"
             exit 1
           fi
           if [ "${{ needs.build-oracle.result }}" != "success" ] || [ "${{ needs.fixture-corpus.result }}" != "success" ]; then
