@@ -286,7 +286,7 @@ func TestRunServesManagementPortalAndStopsCleanly(t *testing.T) {
 		}, &stdout, &stderr)
 	}()
 
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	client := management.NewClient(portalAddress, 1, 2)
 	for {
 		callCtx, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -394,7 +394,8 @@ func writeRuntimeConfig(t *testing.T, path, name, address string) {
 
 func waitForPorts(t *testing.T, addresses ...string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	// Generous for loaded race-mode runners.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		ready := true
 		for _, address := range addresses {

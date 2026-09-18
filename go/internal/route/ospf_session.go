@@ -21,15 +21,14 @@ func NewSessionTracker() *SessionTracker {
 }
 
 // Observe records the sender's session identifier and reports whether it
-// changed since the previous request from that peer.
+// changed since the previous request from that peer. The first observation
+// establishes the baseline and is not a change.
 func (t *SessionTracker) Observe(peerID uint32, sessionID uint64) (changed bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if previous, ok := t.dstSessions[peerID]; ok && previous == sessionID {
-		return false
-	}
+	previous, ok := t.dstSessions[peerID]
 	t.dstSessions[peerID] = sessionID
-	return true
+	return ok && previous != sessionID
 }
 
 // SessionOf returns the last session identifier observed for peerID.

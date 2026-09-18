@@ -217,8 +217,13 @@ func RespondDirectPeerHandshake(ctx context.Context, channel PacketChannel, conf
 		return nil, 0, PeerIdentityUnknown, err
 	}
 	wantProof := networkProof(config.NetworkSecret, handshakeHash)
-	if config.NetworkSecret != "" && subtle.ConstantTimeCompare(proof[:], wantProof[:]) != 1 {
-		return nil, 0, PeerIdentityUnknown, errors.New("network secret proof does not match")
+	// Reference auth matrix (credential -> admin): a remote whose static
+	// key is in the admin's trusted credential list authenticates without
+	// proving the network secret.
+	if config.NetworkSecret != "" && !config.hasTrustedCredentialPubkey(handshake.PeerStatic()) {
+		if subtle.ConstantTimeCompare(proof[:], wantProof[:]) != 1 {
+			return nil, 0, PeerIdentityUnknown, errors.New("network secret proof does not match")
+		}
 	}
 
 	session, err := NewSecureDatagramSession(rootKey[:], suite, epoch, DirectionResponderToInitiator, DirectionInitiatorToResponder)

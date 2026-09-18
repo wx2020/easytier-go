@@ -191,8 +191,11 @@ func TestOSPFServiceEnforcesCredentialPolicy(t *testing.T) {
 		}}},
 		ConnInfo: &peerrpc.SyncRouteInfoRequest_ConnPeerList{
 			ConnPeerList: &peerrpc.RouteConnPeerList{PeerConnInfos: []*peerrpc.RouteConnPeerList_PeerConnInfo{{
-				PeerId:           &peerrpc.PeerIdVersion{PeerId: 1},
-				ConnectedPeerIds: []uint32{9},
+				PeerId: &peerrpc.PeerIdVersion{PeerId: 1},
+				// The link to the receiving peer (2) is implicit in the
+				// transport; without it the local flooder cannot reach the
+				// origin graph and no route converges.
+				ConnectedPeerIds: []uint32{9, 2},
 			}}},
 		},
 	}
