@@ -146,14 +146,18 @@ func TestInteropRouteDissemination(t *testing.T) {
 	}
 	t.Logf("explicit originate broadcast completed")
 
-	// Rust side: the oracle CLI must list the Go peer (77) in its route
-	// table. The CLI reads the RPC portal; find it from the process args.
+	// Rust side: the oracle route table must contain a data row for the Go
+	// peer. The route table has no peer-id column (ipv4/hostname/next_hop/...)
+	// and this test's Go node has no IPv4 or hostname, so the row is
+	// identified by existing at all: an empty table prints only the header.
 	rustPeerSeen := false
 	for time.Now().Before(deadline) {
 		out, err := exec.Command(cliBin, "-p", rpcPortalOf(t, cmd), "route", "list").CombinedOutput()
 		if err == nil {
-			if strings.Contains(string(out), "77") {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if len(lines) > 1 {
 				rustPeerSeen = true
+				t.Logf("oracle route table: %s", strings.TrimSpace(string(out)))
 				break
 			}
 		}
