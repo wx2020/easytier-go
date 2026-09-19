@@ -31,7 +31,6 @@ type Initiator struct {
 	lastInitEncStatic [32]byte
 	lastInitSenderIdx uint32
 	lastInitSharedEE  [32]byte
-	lastInitSharedES  [32]byte
 	stamp             [12]byte
 }
 
@@ -156,11 +155,6 @@ func (i *Initiator) FormatHandshakeInitiation() ([]byte, error) {
 		return nil, err
 	}
 	i.lastInitSharedEE = dhEES
-	dhES, err := ecdhShared(ePriv, i.staticPub)
-	if err != nil {
-		return nil, err
-	}
-	i.lastInitSharedES = dhES
 	return init, nil
 }
 
@@ -191,9 +185,8 @@ func (i *Initiator) ConsumeHandshakeResponse(datagram []byte) (*Session, error) 
 	chainingKey = hmac1(temp[:], []byte{0x01})
 	temp = hmac1(chainingKey[:], i.lastInitSharedEE[:])
 	chainingKey = hmac1(temp[:], []byte{0x01})
-	temp = hmac1(chainingKey[:], i.lastInitSharedES[:])
-	chainingKey = hmac1(temp[:], []byte{0x01})
-	// Initiator's static to responder's ephemeral: ES with roles swapped.
+	// Initiator's static x responder ephemeral: the mirror of the
+	// responder's ES step.
 	dhSE, err := ecdhShared(i.staticPriv, rEpub)
 	if err != nil {
 		return nil, err
