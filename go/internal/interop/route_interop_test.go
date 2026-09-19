@@ -117,7 +117,6 @@ func TestInteropRouteDissemination(t *testing.T) {
 		t.Fatal("OSPF flooder did not start")
 	}
 	learned := false
-	var learnedDest uint32
 	for time.Now().Before(deadline) {
 		for _, rt := range ospf.Routes() {
 			// SeenVersion is only set by Flooder.Receive, so this proves an
@@ -125,7 +124,6 @@ func TestInteropRouteDissemination(t *testing.T) {
 			// route also matches the destination check and must not count.
 			if rt.Destination != identity.PeerID && rt.NextHop != 0 && ospf.SeenVersion(rt.Destination) > 0 {
 				learned = true
-				learnedDest = rt.Destination
 			}
 		}
 		if learned {
