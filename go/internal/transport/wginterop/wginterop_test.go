@@ -337,8 +337,7 @@ func TestInitiatorResponderInterop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	responder, err := NewResponder(respPriv, initPub)
-	if err != nil {
+	if _, err := NewResponder(respPriv, initPub); err != nil {
 		t.Fatal(err)
 	}
 	initiator, err := NewInitiator(initPriv, respPub)
