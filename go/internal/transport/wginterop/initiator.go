@@ -212,7 +212,9 @@ func (i *Initiator) ConsumeHandshakeResponse(datagram []byte) (*Session, error) 
 	// carry the RECEIVER's local index, so our sendingIndex must be the
 	// responder's localIndex (senderIdx from the response), and our
 	// receivingIndex must be our own initiation sender index (ourIdx).
-	session := NewSession(ourIdx, senderIdx, k2, k3)
+	// boringtun orientation: the INITIATOR sends with k2 and receives
+	// with k3 (the responder mirrors: receives k2, sends k3).
+	session := NewSession(ourIdx, senderIdx, k3, k2)
 	return session, nil
 }
 
