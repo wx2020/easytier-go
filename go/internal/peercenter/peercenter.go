@@ -285,7 +285,12 @@ func (r *Runner) loop() {
 
 // Stop cancels the loop and waits for the current job to finish.
 func (r *Runner) Stop() {
-	r.cancel()
+	r.mu.Lock()
+	cancel := r.cancel
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	r.wg.Wait()
 }
 

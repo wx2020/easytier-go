@@ -259,9 +259,11 @@ func (i *Instance) Start(ctx context.Context) error {
 	i.ctx = ctx
 	i.getRunner = NewRunner(i.provider.MyPeerID(), i.provider.ListRoutes, i.getJob)
 	i.reportRunner = NewRunner(i.provider.MyPeerID(), i.provider.ListRoutes, i.reportJob)
-	i.mu.Unlock()
+	// Start inside the critical section: a concurrent Stop that snapshots
+	// the runners must observe them fully started, or never started.
 	i.getRunner.Start()
 	i.reportRunner.Start()
+	i.mu.Unlock()
 	return nil
 }
 
