@@ -10,7 +10,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	commonpb "github.com/EasyTier/EasyTier/go/internal/proto/common"
+	errorpb "github.com/EasyTier/EasyTier/go/internal/proto/error"
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -18,9 +21,9 @@ const (
 	// larger than this are fragmented, mirroring the Rust RPC_PACKET_CONTENT_MTU.
 	peerRpcPacketMTU = 1300
 
-	// envelopeOk / envelopeErr are the first byte of a response body.
-	envelopeOk  = 0
-	envelopeErr = 1
+	// peerRpcCallTimeoutMS is the caller timeout carried in the RpcRequest
+	// envelope; the reference BaseController defaults to the same value.
+	peerRpcCallTimeoutMS = 3000
 )
 
 // ErrNoService is returned when an RPC request does not match any registered
@@ -211,16 +214,29 @@ func (m *PeerRpcManager) sendFragmented(ctx context.Context, dstPeerID uint32, t
 	if len(body) == 0 && !isRequest {
 		body = []byte{}
 	}
+	// The reference wraps the method input in an RpcRequest envelope that
+	// carries the caller timeout, then fragments the encoded envelope.
+	wireBody := body
+	if isRequest {
+		envelope, mErr := proto.Marshal(&commonpb.RpcRequest{
+			Request:   body,
+			TimeoutMs: int32(peerRpcCallTimeoutMS),
+		})
+		if mErr != nil {
+			return fmt.Errorf("marshal rpc request envelope: %w", mErr)
+		}
+		wireBody = envelope
+	}
 	totalPieces := uint32(1)
-	if len(body) > peerRpcPacketMTU {
-		totalPieces = uint32((len(body) + peerRpcPacketMTU - 1) / peerRpcPacketMTU)
+	if len(wireBody) > peerRpcPacketMTU {
+		totalPieces = uint32((len(wireBody) + peerRpcPacketMTU - 1) / peerRpcPacketMTU)
 	}
 	for piece := uint32(0); piece < totalPieces; piece++ {
 		start, end := int(piece)*peerRpcPacketMTU, int(piece+1)*peerRpcPacketMTU
-		if end > len(body) {
-			end = len(body)
+		if end > len(wireBody) {
+			end = len(wireBody)
 		}
-		pieceBody := body[start:end]
+		pieceBody := wireBody[start:end]
 		packet := RpcPacket{
 			FromPeer:      m.localPeerID,
 			ToPeer:        dstPeerID,
@@ -299,6 +315,13 @@ func (m *PeerRpcManager) dispatchRequest(ctx context.Context, request RpcPacket)
 	if request.Descriptor == nil {
 		return m.sendErrorResponse(ctx, request, errors.New("request is missing a descriptor"))
 	}
+	// The reference wraps the method input in an RpcRequest envelope;
+	// unwrap it and pass the raw method body to the service handler.
+	envelope := &commonpb.RpcRequest{}
+	if err := proto.Unmarshal(request.Body, envelope); err != nil {
+		return m.sendErrorResponse(ctx, request, fmt.Errorf("decode rpc request envelope: %w", err))
+	}
+	methodBody := envelope.GetRequest()
 	key := registrationKey{
 		domain:      request.Descriptor.DomainName,
 		serviceName: request.Descriptor.ServiceName,
@@ -310,7 +333,7 @@ func (m *PeerRpcManager) dispatchRequest(ctx context.Context, request RpcPacket)
 		return m.sendErrorResponse(ctx, request, fmt.Errorf("%w: %s", ErrNoService, key.serviceName))
 	}
 
-	responseBody, err := svc.HandleMethod(request.Descriptor.MethodIndex, ctx, request.FromPeer, request.Body)
+	responseBody, err := svc.HandleMethod(request.Descriptor.MethodIndex, ctx, request.FromPeer, methodBody)
 	if err != nil {
 		return m.sendErrorResponse(ctx, request, err)
 	}
@@ -318,13 +341,17 @@ func (m *PeerRpcManager) dispatchRequest(ctx context.Context, request RpcPacket)
 }
 
 func (m *PeerRpcManager) sendResponse(ctx context.Context, request RpcPacket, responseBody []byte) error {
-	descriptor := request.Descriptor
+	// The reference wraps method output in an RpcResponse envelope.
+	responseBody, err := proto.Marshal(&commonpb.RpcResponse{Response: responseBody})
+	if err != nil {
+		return fmt.Errorf("marshal rpc response envelope: %w", err)
+	}
 	response := RpcPacket{
 		FromPeer:      m.localPeerID,
 		ToPeer:        request.FromPeer,
 		TransactionID: request.TransactionID,
-		Descriptor:    descriptor,
-		Body:          append([]byte{envelopeOk}, responseBody...),
+		Descriptor:    request.Descriptor,
+		Body:          responseBody,
 		IsRequest:     false,
 		TotalPieces:   1,
 	}
@@ -343,13 +370,25 @@ func (m *PeerRpcManager) sendResponse(ctx context.Context, request RpcPacket, re
 	return m.transport.Send(ctx, request.FromPeer, out)
 }
 
-func (m *PeerRpcManager) sendErrorResponse(ctx context.Context, request RpcPacket, err error) error {
+func (m *PeerRpcManager) sendErrorResponse(ctx context.Context, request RpcPacket, rpcErr error) error {
+	// Reference error responses carry an errorpb.Error oneof; OtherError is
+	// the generic kind used for handler failures.
+	encoded, err := proto.Marshal(&commonpb.RpcResponse{
+		Error: &errorpb.Error{
+			ErrorKind: &errorpb.Error_OtherError{
+				OtherError: &errorpb.OtherError{ErrorMessage: rpcErr.Error()},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal rpc error envelope: %w", err)
+	}
 	response := RpcPacket{
 		FromPeer:      m.localPeerID,
 		ToPeer:        request.FromPeer,
 		TransactionID: request.TransactionID,
 		Descriptor:    request.Descriptor,
-		Body:          append([]byte{envelopeErr}, []byte(err.Error())...),
+		Body:          encoded,
 		IsRequest:     false,
 		TotalPieces:   1,
 	}
@@ -401,16 +440,16 @@ func (m *PeerRpcManager) Close() {
 	m.mu.Unlock()
 }
 
+// decodeResponseEnvelope unwraps the reference RpcResponse envelope: the
+// Response field carries the method output and the Error field carries a
+// structured failure from the remote handler.
 func decodeResponseEnvelope(body []byte) ([]byte, error) {
-	if len(body) == 0 {
-		return nil, errors.New("empty rpc response")
+	response := &commonpb.RpcResponse{}
+	if err := proto.Unmarshal(body, response); err != nil {
+		return nil, fmt.Errorf("decode rpc response envelope: %w", err)
 	}
-	switch body[0] {
-	case envelopeErr:
-		return nil, errors.New(string(body[1:]))
-	case envelopeOk:
-		return body[1:], nil
-	default:
-		return nil, fmt.Errorf("unknown rpc response envelope type %d", body[0])
+	if response.GetError() != nil {
+		return nil, errors.New(response.GetError().String())
 	}
+	return response.GetResponse(), nil
 }

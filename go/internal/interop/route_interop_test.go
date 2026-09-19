@@ -49,7 +49,6 @@ func routeInteropSkip(t *testing.T) {
 }
 
 func TestInteropRouteDissemination(t *testing.T) {
-	routeInteropSkip(t)
 	coreBin := os.Getenv("RUST_ORACLE_CORE")
 	cliBin := os.Getenv("RUST_ORACLE_CLI")
 	if coreBin == "" || cliBin == "" {
