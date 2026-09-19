@@ -401,3 +401,20 @@ gh run view -R wx2020/easytier-go <run-id> --log-failed
 33. **遗留收敛**：P1 四项全部实测打通（加密/OSPF/peer-center 骨架/QUIC 降格决策）；
     WG-noise rust 方向仍为 Go-Go 标注回退；矩阵矩阵门禁仍为信息性（恢复阻塞的
     前置条件是稳定多轮全绿）。
+
+### 2.0h 第十一轮：WG 发起方实现与 oracle 实测诊断（2026-09-19）
+
+34. **`wginterop.Initiator` 实现**：boringtun 客户端半边补齐——`FormatHandshakeInitiation`
+    （148 字节 Noise IK 发起，TAI64N 单调时间戳）+ `ConsumeHandshakeResponse`（验证
+    空认证 tag、派生传输会话）。CI 驱动修正五个自身缺陷：互斥体重入死锁、encStatic
+    密封用错 DH（应为 ephemeral-static）、响应链混入陈旧 ES、数据包索引约定颠倒
+    （数据包携带接收方本地索引）、k2/k3 收发方向颠倒（发起方发 k2 收 k3）。
+    全部以通过的 wgtest 往返测试为基准逐项比对定位；`TestInitiatorResponderInterop`
+    验证握手、双向数据与 rekey。
+35. **oracle wg:// 实测诊断**：Go 发起方对拉起的 oracle wg:// 监听发起握手，
+    10 秒无响应。oracle 日志显示监听已创建（run_listener 完成 addr 转换并登记
+    "new listener added listener=wg://…"）但 **零 UDP 收包痕迹**（无
+    "Received bytes from peer"/"New peer"，仅 4 条无关 TCP 握手错误）——
+    `handle_udp_incoming` 接收循环疑似未启动或绑定端口与我们的目标不一致。
+    测试转为诊断性 skip，Go 侧栈由 `TestInitiatorResponderInterop` 全覆盖，
+    oracle 侧排查留待专项（需在 oracle 日志中加 wg 收包计数）。
