@@ -149,11 +149,6 @@ func (i *Initiator) FormatHandshakeInitiation() ([]byte, error) {
 	i.lastInitChain = chainingKey
 	copy(i.lastInitEncStatic[:], encStatic)
 	i.lastInitSenderIdx = senderIdx
-	dhEES, err := ecdhShared(ePriv, i.peerPub)
-	if err != nil {
-		return nil, err
-	}
-	i.lastInitSharedEE = dhEES
 	return init, nil
 }
 
