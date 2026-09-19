@@ -317,3 +317,84 @@ func bytesToHex(data []byte) string {
 func randRead(data []byte) (int, error) { return rand.Read(data) }
 
 func loopbackIP() net.IP { return net.ParseIP("127.0.0.1") }
+
+// The production Initiator must interoperate with the production Responder:
+// same Noise IK message shapes, crypto primitives and session key
+// derivation on both halves, exercised fully in-process.
+func TestInitiatorResponderInterop(t *testing.T) {
+	var initPriv, respPriv [32]byte
+	if _, err := randRead(initPriv[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := randRead(respPriv[:]); err != nil {
+		t.Fatal(err)
+	}
+	respPub, err := x25519Public(respPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initPub, err := x25519Public(initPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responder, err := NewResponder(respPriv, initPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initiator, err := NewInitiator(initPriv, respPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	init, err := initiator.FormatHandshakeInitiation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(init) != HandshakeInitSize {
+		t.Fatalf("initiation size = %d", len(init))
+	}
+	// The responder's rate limiter must accept our MAC1.
+	tunn, err := NewTunn(respPriv, initPub, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tunn.HandleDatagram(nil, init)
+	if result.Kind != KindNetwork || len(result.ToNetwork) != HandshakeRespSize {
+		t.Fatalf("handshake result kind = %v len = %d", result.Kind, len(result.ToNetwork))
+	}
+	session, err := initiator.ConsumeHandshakeResponse(result.ToNetwork)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Data initiator -> responder through the tunn data plane.
+	sealed := session.SealData([]byte("interop-ping"))
+	got := tunn.HandleDatagram(nil, sealed)
+	if got.Kind != KindTunnel || string(got.ToTunnel) != "interop-ping" {
+		t.Fatalf("tunnel kind = %v payload = %q", got.Kind, got.ToTunnel)
+	}
+	// Data responder -> initiator.
+	back, ok := tunn.SealData([]byte("interop-pong"))
+	if !ok {
+		t.Fatal("responder has no session to seal with")
+	}
+	plaintext, err := session.OpenData(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plaintext) != "interop-pong" {
+		t.Fatalf("round trip = %q", plaintext)
+	}
+	// A second handshake from the same initiator must rekey cleanly.
+	init2, err := initiator.FormatHandshakeInitiation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = tunn.HandleDatagram(nil, init2)
+	if result.Kind != KindNetwork {
+		t.Fatalf("rekey result = %v", result.Kind)
+	}
+	if _, err := initiator.ConsumeHandshakeResponse(result.ToNetwork); err != nil {
+		t.Fatalf("rekey response rejected: %v", err)
+	}
+}
