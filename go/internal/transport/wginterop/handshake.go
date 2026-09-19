@@ -95,7 +95,7 @@ func NewResponder(staticPriv, peerPub [32]byte) (*Responder, error) {
 	}
 	var ss [32]byte
 	copy(ss[:], shared)
-	myPub, err := x25519Public(staticPriv)
+	myPub, err := PublicKey(staticPriv)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,10 @@ func ecdhShared(priv, pub [32]byte) ([32]byte, error) {
 	return out, nil
 }
 
-func x25519Public(priv [32]byte) ([32]byte, error) {
+// PublicKey derives the X25519 public key for priv. Used by callers that
+// hold a raw static private and need its public half (e.g. WG interop
+// against a peer that derives its key from the network identity).
+func PublicKey(priv [32]byte) ([32]byte, error) {
 	key, err := ecdh.X25519().NewPrivateKey(priv[:])
 	if err != nil {
 		return [32]byte{}, err

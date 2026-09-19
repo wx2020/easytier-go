@@ -64,7 +64,7 @@ func NewTunn(staticPriv, peerPub [32]byte, rateLimit uint64) (*Tunn, error) {
 	if err != nil {
 		return nil, err
 	}
-	myPub, err := x25519Public(staticPriv)
+	myPub, err := PublicKey(staticPriv)
 	if err != nil {
 		return nil, err
 	}

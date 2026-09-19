@@ -138,11 +138,11 @@ func TestResponderHandshakeRoundTrip(t *testing.T) {
 	if _, err := randRead(respPriv[:]); err != nil {
 		t.Fatal(err)
 	}
-	respPub, err := x25519Public(respPriv)
+	respPub, err := PublicKey(respPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initPub, err := x25519Public(initPriv)
+	initPub, err := PublicKey(initPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +198,11 @@ func TestResponderRejects(t *testing.T) {
 	if _, err := randRead(respPriv[:]); err != nil {
 		t.Fatal(err)
 	}
-	respPub, err := x25519Public(respPriv)
+	respPub, err := PublicKey(respPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initPub, err := x25519Public(initPriv)
+	initPub, err := PublicKey(initPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,8 +264,8 @@ func TestCookieUnderLoad(t *testing.T) {
 	if _, err := randRead(respPriv[:]); err != nil {
 		t.Fatal(err)
 	}
-	respPub, _ := x25519Public(respPriv)
-	initPub, _ := x25519Public(initPriv)
+	respPub, _ := PublicKey(respPriv)
+	initPub, _ := PublicKey(initPriv)
 	tunn, err := NewTunn(respPriv, initPub, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -329,11 +329,11 @@ func TestInitiatorResponderInterop(t *testing.T) {
 	if _, err := randRead(respPriv[:]); err != nil {
 		t.Fatal(err)
 	}
-	respPub, err := x25519Public(respPriv)
+	respPub, err := PublicKey(respPriv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initPub, err := x25519Public(initPriv)
+	initPub, err := PublicKey(initPriv)
 	if err != nil {
 		t.Fatal(err)
 	}

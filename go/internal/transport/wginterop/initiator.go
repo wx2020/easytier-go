@@ -50,7 +50,7 @@ func NewInitiator(staticPriv, peerPub [32]byte) (*Initiator, error) {
 	}
 	var ss [32]byte
 	copy(ss[:], shared)
-	myPub, err := x25519Public(staticPriv)
+	myPub, err := PublicKey(staticPriv)
 	if err != nil {
 		return nil, err
 	}
