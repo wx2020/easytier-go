@@ -201,7 +201,10 @@ func syncResponseError(responseBody []byte) error {
 	if err := proto.Unmarshal(responseBody, response); err != nil {
 		return nil
 	}
-	if response.GetError() == peerrpc.SyncRouteInfoError_DuplicatePeerId {
+	// The error field is optional and DuplicatePeerId is the ZERO enum
+	// value: an absent error on a successful response must not be read as
+	// a rejection, so test the pointer, not the getter.
+	if response.Error != nil && *response.Error == peerrpc.SyncRouteInfoError_DuplicatePeerId {
 		return fmt.Errorf("duplicate peer id detected by the remote peer")
 	}
 	return nil
