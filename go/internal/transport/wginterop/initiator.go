@@ -103,7 +103,14 @@ func (i *Initiator) FormatHandshakeInitiation() ([]byte, error) {
 	inner := hmac1(chainingKey[:], ePub[:])
 	temp := hmac1(inner[:], []byte{0x01})
 	chainingKey = temp
-	temp = hmac1(chainingKey[:], i.staticShared[:])
+	// The static key is sealed under the EPHEMERAL-STATIC secret
+	// (initiator ephemeral x responder static), matching boringtun and
+	// the responder's open step; the static-static secret comes later.
+	sharedES, err := ecdhShared(ePriv, i.peerPub)
+	if err != nil {
+		return nil, err
+	}
+	temp = hmac1(chainingKey[:], sharedES[:])
 	chainingKey = hmac1(temp[:], []byte{0x01})
 	key := hmac2(temp[:], chainingKey[:], []byte{0x02})
 	encStatic := sealAEAD(nil, key[:], 0, i.staticPub[:], hash[:])
