@@ -357,3 +357,22 @@ gh run view -R wx2020/easytier-go <run-id> --log-failed
       双向 legacy 握手协议），需双侧包级 trace 的专项会话；非单点 bug。
 28. 两测试暂以 `routeInteropSkip` 跳过（skip 消息含完整诊断），探针保留为诊断资产；
     矩阵其余 64 cell 保持绿色。
+
+### 2.0f 第九轮：P4 工作流端验证（2026-09-19）
+
+29. **race 门禁恢复为阻塞**：`go.yml` 与 interop `build-go` 的 `go test -race ./...`
+    不再是 continue-on-error——P4 契约（SE §8.1：race 检测器对单测与集成测试强制）
+    在工作流端落地。恢复过程抓出并修复：
+    - `SessionTracker.Observe` 首次观察误报为变更（基线语义错误）；
+    - 直连噪声响应端拒绝信任列表中的凭证客户端（参考认证矩阵 credential→admin
+      应豁免网络密钥证明，响应端现按静态密钥命中跳过校验）；
+    - **peercenter.Instance 真数据竞争**：Start 在锁外发布/启动 runner，回滚路径的
+      并发 Close 与之竞争；现 Start 全程持锁、Stop 快照后停止，Runner.Stop 的
+      cancel 读取同样加锁；
+    - 负载敏感 deadline 加固（cmd/easytier-core 实例启动/管理面就绪 1s→10s、
+      peercenter 全局地图 3s→10s）与测试拓扑修正（凭证测试的 conn 行补上接收方
+      隐式边；凭证补上 AllowRelay）。
+30. **dispatch-only 语料再生 job**（`fixture-regen`）：编译 Rust oracle 的
+    gen-fixtures、再生 `go/testdata/compat` 并与提交语料 diff（零 diff 或 §11 记录），
+    仅 `workflow_dispatch` 触发，不占 per-push 成本；聚合门禁硬性要求 build+race，
+    其余（oracle 拉取/语料/再生/矩阵）保持信息性并回显结果。
