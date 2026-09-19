@@ -29,7 +29,7 @@ import (
 // the node at all (proxy byte counters) versus the oracle failing to process
 // them (RUST_LOG=debug output).
 func TestInteropRouteProxyDiagnosis(t *testing.T) {
-	routeInteropSkip(t)
+	t.Skip("probe retained for diagnosis; the dissemination test covers the scenario")
 	coreBin := os.Getenv("RUST_ORACLE_CORE")
 	cliBin := os.Getenv("RUST_ORACLE_CLI")
 	if coreBin == "" || cliBin == "" {
