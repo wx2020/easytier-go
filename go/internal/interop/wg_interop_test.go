@@ -36,7 +36,7 @@ func TestInteropWGOracle(t *testing.T) {
 	secret := "secret"
 	wgAddr := freeUDPPort(t)
 	rpcAddr := freeTCPPort(t)
-	cmd, cleanup := spawnRustWithExtra(t, coreBin, network, secret,
+	_, cleanup := spawnRustWithExtra(t, coreBin, network, secret,
 		[]string{"wg://" + wgAddr, "tcp://" + rpcAddr}, nil, nil)
 	defer cleanup()
 	if !waitForUDPAddr(wgAddr, 10*time.Second) {
