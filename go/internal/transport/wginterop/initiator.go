@@ -207,13 +207,12 @@ func (i *Initiator) ConsumeHandshakeResponse(datagram []byte) (*Session, error) 
 	temp1 := hmac1(chainingKey[:], nil)
 	k2 := hmac1(temp1[:], []byte{0x01})
 	k3 := hmac2(temp1[:], k2[:], []byte{0x02})
-	// Initiator session: we send under temp3 (k3) and receive under temp2
-	// (k2); the responder built the mirror. Session stores (receiving,
-	// sending) and its own send/receive indexes: we receive on the
-	// responder's sender index, and send with our receiver index as the
-	// responder-side receiving hint is irrelevant for data (data packets
-	// carry the receiver's local index, i.e. the responder's localIndex).
-	session := NewSession(senderIdx, ourIdx, k2, k3)
+	// Initiator session: we receive under k2, send under k3; the responder
+	// built the mirror (it receives under k3, sends under k2). Data packets
+	// carry the RECEIVER's local index, so our sendingIndex must be the
+	// responder's localIndex (senderIdx from the response), and our
+	// receivingIndex must be our own initiation sender index (ourIdx).
+	session := NewSession(ourIdx, senderIdx, k2, k3)
 	return session, nil
 }
 
