@@ -38,7 +38,7 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(wire, decoded); err != nil {
 		t.Fatal(err)
 	}
-	lsas, err := advertisementsFromSyncRequest(decoded, 99, 0)
+	lsas, err := advertisementsFromSyncRequest(decoded, 99)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestAdvertisementFromConnBitmap(t *testing.T) {
 			ConnBitmap: &peerrpc.RouteConnBitmap{PeerIds: peerIDs, Bitmap: bitmap},
 		},
 	}
-	lsas, err := advertisementsFromSyncRequest(request, 5, 0)
+	lsas, err := advertisementsFromSyncRequest(request, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,18 +150,6 @@ func TestAdvertisementFromConnBitmap(t *testing.T) {
 	if len(lsas[1].Peers) != 0 || len(lsas[2].Peers) != 0 {
 		t.Fatalf("relayed self-descriptions must be node-info-only: %+v %+v", lsas[1], lsas[2])
 	}
-
-	// The receiver's own id never appears as an edge: the link to the
-	// receiver is real but self-edges never route.
-	lsas, err = advertisementsFromSyncRequest(request, 5, 6)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, edge := range lsas[0].Peers {
-		if edge.Peer == 6 {
-			t.Fatalf("local peer edge must be dropped: %+v", lsas[0].Peers)
-		}
-	}
 }
 
 // Missing conn info degrades to node-info-only LSAs.
@@ -170,7 +158,7 @@ func TestAdvertisementFromNodeInfoOnly(t *testing.T) {
 		MyPeerId:  3,
 		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{{PeerId: 3, Version: 1}}},
 	}
-	lsas, err := advertisementsFromSyncRequest(request, 3, 0)
+	lsas, err := advertisementsFromSyncRequest(request, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +169,7 @@ func TestAdvertisementFromNodeInfoOnly(t *testing.T) {
 
 // Zero origins and oversized payloads must be rejected.
 func TestSyncRequestValidation(t *testing.T) {
-	if _, err := advertisementsFromSyncRequest(&peerrpc.SyncRouteInfoRequest{}, 0, 0); err == nil {
+	if _, err := advertisementsFromSyncRequest(&peerrpc.SyncRouteInfoRequest{}, 0); err == nil {
 		t.Fatal("zero origin must fail")
 	}
 	oversized := &peerrpc.SyncRouteInfoRequest{MyPeerId: 1}
@@ -190,7 +178,7 @@ func TestSyncRequestValidation(t *testing.T) {
 		items[i] = &peerrpc.RoutePeerInfo{PeerId: uint32(i + 1)}
 	}
 	oversized.PeerInfos = &peerrpc.RoutePeerInfos{Items: items}
-	if _, err := advertisementsFromSyncRequest(oversized, 1, 0); err == nil {
+	if _, err := advertisementsFromSyncRequest(oversized, 1); err == nil {
 		t.Fatal("oversized peer list must fail")
 	}
 }

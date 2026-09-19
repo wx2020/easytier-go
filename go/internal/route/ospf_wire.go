@@ -89,11 +89,12 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 // item yields one LSA: a self-description carries no edges unless the request
 // also contains that peer's conn row (normally only the sender reports its
 // own links, so relayed entries install as node-info-only LSAs and their
-// edges arrive through their own syncs). Edges pointing at localPeerID are
-// dropped - the reporter's link to the receiver is real but self-edges never
-// route. Link costs do not travel: the reference conn graph is unweighted, so
-// edges default to cost 1.
-func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID, localPeerID uint32) ([]Advertisement, error) {
+// edges arrive through their own syncs). Edges toward the receiver are the
+// reporter-to-receiver direct link and must survive;
+// route and self-edges never appear (a reporter never lists itself). Link
+// costs do not travel: the reference conn graph is unweighted, so edges
+// default to cost 1.
+func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID uint32) ([]Advertisement, error) {
 	if req == nil {
 		return nil, fmt.Errorf("ospf sync request is nil")
 	}
@@ -144,9 +145,6 @@ func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID
 			adv.Timestamp = item.GetLastUpdate().GetSeconds()
 		}
 		for _, peer := range reportedEdges[item.GetPeerId()] {
-			if peer == localPeerID {
-				continue
-			}
 			adv.Peers = append(adv.Peers, PeerCost{Peer: peer, Cost: 1})
 		}
 		sort.Slice(adv.Peers, func(i, j int) bool { return adv.Peers[i].Peer < adv.Peers[j].Peer })
@@ -173,9 +171,6 @@ func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID
 		// the receiver still records the reporter's existence.
 		adv := Advertisement{Origin: origin}
 		for _, peer := range reportedEdges[origin] {
-			if peer == localPeerID {
-				continue
-			}
 			adv.Peers = append(adv.Peers, PeerCost{Peer: peer, Cost: 1})
 		}
 		sort.Slice(adv.Peers, func(i, j int) bool { return adv.Peers[i].Peer < adv.Peers[j].Peer })

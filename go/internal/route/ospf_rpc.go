@@ -66,7 +66,7 @@ func NewOSPFService(flooder *Flooder, cfg *OSPFServiceConfig) *rpc.FuncService {
 		// sync state, so only the observation is recorded.
 		tracker.Observe(fromPeerID, request.GetMySessionId())
 
-		lsas, err := advertisementsFromSyncRequest(request, fromPeerID, flooder.LocalPeerID())
+		lsas, err := advertisementsFromSyncRequest(request, fromPeerID)
 		if err != nil {
 			return nil, err
 		}
