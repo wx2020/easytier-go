@@ -21,7 +21,7 @@ import (
 // following the proto service declaration order (ReportPeers, then
 // GetGlobalPeerMap).
 const (
-	PeerCenterProtoName           = "peer_rpc.PeerCenterRpc"
+	PeerCenterProtoName           = "PeerCenterRpc"
 	ServiceNamePeerCenter         = "PeerCenterRpc"
 	MethodReportPeers      uint32 = 1
 	MethodGetGlobalPeerMap uint32 = 2

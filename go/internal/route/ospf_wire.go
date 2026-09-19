@@ -19,7 +19,7 @@ import (
 // the RPC descriptor; the reference registry keys services by
 // (domain, service_name, proto_name) and the OSPF route service lives in the
 // peer_rpc proto package.
-const OSPFRouteProtoName = "peer_rpc.OspfRouteRpc"
+const OSPFRouteProtoName = "OspfRouteRpc"
 
 // MaxSyncRouteInfoRequestSize bounds one encoded SyncRouteInfoRequest.
 const MaxSyncRouteInfoRequestSize = 1 << 20
