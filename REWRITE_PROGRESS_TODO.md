@@ -376,3 +376,28 @@ gh run view -R wx2020/easytier-go <run-id> --log-failed
     gen-fixtures、再生 `go/testdata/compat` 并与提交语料 diff（零 diff 或 §11 记录），
     仅 `workflow_dispatch` 触发，不占 per-push 成本；聚合门禁硬性要求 build+race，
     其余（oracle 拉取/语料/再生/矩阵）保持信息性并回显结果。
+
+### 2.0g 第十轮：路由扩散互通打通（2026-09-19）
+
+31. **互操作阻塞点完全解除**。深挖链（envelope 缺失 → 适配器伪造身份条目 →
+    proto_name 注册键不匹配 → 零值枚举误读）逐层修复后，`TestInteropRouteDissemination`
+    **真实通过**（1.64s：oracle 拉起、双向 LSA 交换、originate 成功、oracle CLI
+    路由表含 Go peer 行；`handling sync_route_info` ×6、trace 级 `Received request
+    packet` ×N）。矩阵 61 job 全绿、0 失败。
+32. **本轮修复清单**：
+    - envelope 层（§2.0e 后继）：`RpcRequest`/`RpcResponse` 封装对齐，`errorpb.Error`
+      OtherError 映射；
+    - OSPF 适配器重写：`peer_infos` 仅携带 origin 自述条目（伪造邻居条目会触发
+      oracle 重复检测 panic——`peer_route_id` 外来 + 版本更高 = 身份盗用判定），
+      连接性走 conn_info 行，解码按 item 生成 LSA（reporter 行给边）；
+    - 注册键 `proto_name` 为**裸服务名**（prost-build 的 Service.proto_name 不含
+      包前缀），`peer_rpc.` 前缀导致 InvalidService——OSPF 与 peer-center 同修；
+    - `syncResponseError` 按指针判空：`DuplicatePeerId` 是零值枚举，proto3 optional
+      缺席时 getter 返回 0，成功响应曾被误读为拒绝；
+    - 路由测试节点装配与 oracle 匹配的 LegacyCipher（参考默认加密），控制包
+      （ping/pong）豁免加密（参考 peer_conn 直连 sink 不经加密器）；
+    - "learned" 判据改用 `SeenVersion`（仅 Receive 置位），排除自身邻居路由假阳性；
+      oracle 路由表断言改为数据行存在性（表无 peer_id 列且 Go 节点无 IPv4/hostname）。
+33. **遗留收敛**：P1 四项全部实测打通（加密/OSPF/peer-center 骨架/QUIC 降格决策）；
+    WG-noise rust 方向仍为 Go-Go 标注回退；矩阵矩阵门禁仍为信息性（恢复阻塞的
+    前置条件是稳定多轮全绿）。
