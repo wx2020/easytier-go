@@ -73,6 +73,12 @@ func NewInitiator(staticPriv, peerPub [32]byte) (*Initiator, error) {
 func (i *Initiator) allocIndex() uint32 {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	return i.allocIndexLocked()
+}
+
+// allocIndexLocked is the unsynchronized core; callers holding i.mu use
+// this directly (Go mutexes are not reentrant).
+func (i *Initiator) allocIndexLocked() uint32 {
 	index := i.nextIndex
 	i.nextIndex = (index & ^uint32(0xff)) | uint32(uint8(index)+1)
 	return index
@@ -122,7 +128,7 @@ func (i *Initiator) FormatHandshakeInitiation() ([]byte, error) {
 	}
 	hash = hash2(hash[:], encTs)
 
-	senderIdx := i.allocIndex()
+	senderIdx := i.allocIndexLocked()
 	init := make([]byte, HandshakeInitSize)
 	binary.LittleEndian.PutUint32(init[0:4], MsgTypeHandshakeInit)
 	binary.LittleEndian.PutUint32(init[initSenderIdxOff:initSenderIdxOff+4], senderIdx)
