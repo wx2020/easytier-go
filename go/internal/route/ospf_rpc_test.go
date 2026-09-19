@@ -168,7 +168,9 @@ func TestOSPFServiceEnforcesCredentialPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentialPeer := &peerrpc.TrustedCredentialPubkey{Pubkey: make([]byte, 32)}
+	// Relay permission is required for the credential peer's conn info to
+	// be accepted.
+	credentialPeer := &peerrpc.TrustedCredentialPubkey{Pubkey: make([]byte, 32), AllowRelay: true}
 	proof, err := SignTrustedCredentialProof(credentialPeer, "mesh-secret")
 	if err != nil {
 		t.Fatal(err)

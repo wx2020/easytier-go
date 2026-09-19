@@ -255,21 +255,28 @@ func (i *Instance) Start(ctx context.Context) error {
 		return fmt.Errorf("register peer center rpc service: %w", err)
 	}
 
+	i.mu.Lock()
 	i.ctx = ctx
 	i.getRunner = NewRunner(i.provider.MyPeerID(), i.provider.ListRoutes, i.getJob)
 	i.reportRunner = NewRunner(i.provider.MyPeerID(), i.provider.ListRoutes, i.reportJob)
+	i.mu.Unlock()
 	i.getRunner.Start()
 	i.reportRunner.Start()
 	return nil
 }
 
-// Stop stops both job runners and unregisters the RPC service.
+// Stop stops both job runners and unregisters the RPC service. The runner
+// fields are published by Start under i.mu; snapshot them under the lock
+// so a concurrent Close during Start cannot race.
 func (i *Instance) Stop() {
-	if i.getRunner != nil {
-		i.getRunner.Stop()
+	i.mu.Lock()
+	getRunner, reportRunner := i.getRunner, i.reportRunner
+	i.mu.Unlock()
+	if getRunner != nil {
+		getRunner.Stop()
 	}
-	if i.reportRunner != nil {
-		i.reportRunner.Stop()
+	if reportRunner != nil {
+		reportRunner.Stop()
 	}
 	i.rpcMgr.Unregister(i.domain, ServiceNamePeerCenter)
 }
