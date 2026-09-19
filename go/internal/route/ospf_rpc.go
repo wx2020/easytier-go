@@ -66,7 +66,7 @@ func NewOSPFService(flooder *Flooder, cfg *OSPFServiceConfig) *rpc.FuncService {
 		// sync state, so only the observation is recorded.
 		tracker.Observe(fromPeerID, request.GetMySessionId())
 
-		advertisement, err := advertisementFromSyncRequest(request, fromPeerID)
+		lsas, err := advertisementsFromSyncRequest(request, fromPeerID, flooder.LocalPeerID())
 		if err != nil {
 			return nil, err
 		}
@@ -76,23 +76,25 @@ func NewOSPFService(flooder *Flooder, cfg *OSPFServiceConfig) *rpc.FuncService {
 			secret = cfg.NetworkSecret
 			credentialPeer = cfg.IsCredentialPeer != nil && cfg.IsCredentialPeer(fromPeerID)
 		}
-		// Only proofs that authenticate under our network secret are
-		// trustworthy; anything else is dropped before use.
-		advertisement.TrustedCredentials = VerifiedTrustedCredentials(advertisement.TrustedCredentials, secret)
-
 		// Reference check_duplicate_peer_id: conflicting route identities
 		// with version regressions flag duplicated peer ids.
 		if duplicate := checkDuplicatePeerID(flooder, request, fromPeerID); duplicate {
 			return syncRouteInfoErrorResponse(flooder)
 		}
-		// Credential peers may only propagate their own route info, and
-		// their connection info requires a verified relay permission.
-		if credentialPeer && !VerifiedCredentialAllowsRelay(advertisement.TrustedCredentials, secret) {
-			advertisement.Peers = nil
-		}
 
-		if _, err := flooder.Receive(ctx, advertisement, fromPeerID); err != nil {
-			return nil, err
+		for i := range lsas {
+			// Only proofs that authenticate under our network secret are
+			// trustworthy; anything else is dropped before use.
+			lsas[i].TrustedCredentials = VerifiedTrustedCredentials(lsas[i].TrustedCredentials, secret)
+			// Credential peers may only propagate their own route info, and
+			// their connection info requires a verified relay permission.
+			if credentialPeer && lsas[i].Origin == fromPeerID &&
+				!VerifiedCredentialAllowsRelay(lsas[i].TrustedCredentials, secret) {
+				lsas[i].Peers = nil
+			}
+			if _, err := flooder.Receive(ctx, lsas[i], fromPeerID); err != nil {
+				return nil, err
+			}
 		}
 		response := &peerrpc.SyncRouteInfoResponse{
 			IsInitiator: false,

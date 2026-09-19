@@ -47,25 +47,13 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 	version := uint32(adv.Version)
 	lastUpdate := timestamppb.New(time.Unix(adv.Timestamp, 0))
 
-	items := make([]*peerrpc.RoutePeerInfo, 0, len(peers)+1)
-	items = append(items, &peerrpc.RoutePeerInfo{
-		PeerId:                   adv.Origin,
-		Cost:                     0,
-		Version:                  version,
-		LastUpdate:               lastUpdate,
-		ProxyCidrs:               append([]string(nil), cidrs...),
-		UdpNatType:               adv.UDPNatType,
-		PeerRouteId:              adv.PeerRouteID,
-		TrustedCredentialPubkeys: adv.TrustedCredentials,
-	})
+	// Reference semantics: RoutePeerInfo items are PEER SELF-DESCRIPTIONS
+	// (the origin's own, plus relayed ones), never fabricated entries for
+	// other peers - the oracle's duplicate detection treats an entry with
+	// its own peer_id under a foreign route id as identity theft. Link
+	// connectivity travels in conn_info, not in peer_infos.
 	connected := make([]uint32, 0, len(peers))
 	for _, peer := range peers {
-		items = append(items, &peerrpc.RoutePeerInfo{
-			PeerId:     peer.Peer,
-			Cost:       peer.Cost,
-			Version:    version,
-			LastUpdate: lastUpdate,
-		})
 		connected = append(connected, peer.Peer)
 	}
 
@@ -73,7 +61,16 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 		MyPeerId:    adv.Origin,
 		MySessionId: sessionID,
 		IsInitiator: true,
-		PeerInfos:   &peerrpc.RoutePeerInfos{Items: items},
+		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{{
+			PeerId:                   adv.Origin,
+			Cost:                     0,
+			Version:                  version,
+			LastUpdate:               lastUpdate,
+			ProxyCidrs:               append([]string(nil), cidrs...),
+			UdpNatType:               adv.UDPNatType,
+			PeerRouteId:              adv.PeerRouteID,
+			TrustedCredentialPubkeys: adv.TrustedCredentials,
+		}}},
 		ConnInfo: &peerrpc.SyncRouteInfoRequest_ConnPeerList{
 			ConnPeerList: &peerrpc.RouteConnPeerList{
 				PeerConnInfos: []*peerrpc.RouteConnPeerList_PeerConnInfo{{
@@ -85,124 +82,141 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 	}, nil
 }
 
-// advertisementFromSyncRequest decodes one reference SyncRouteInfoRequest
-// back into the flooder's LSA form: the origin's links come from its own
-// conn-info rows and the per-peer entries carry the link costs. Unknown or
-// zero costs fall back to 1, mirroring the reference's unweighted graph.
-func advertisementFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID uint32) (Advertisement, error) {
+// advertisementsFromSyncRequest decodes one reference SyncRouteInfoRequest
+// into the flooder's LSA form. Reference semantics: every RoutePeerInfo item
+// is a peer SELF-DESCRIPTION (the sender's own entry plus relayed ones), and
+// the conn-info rows describe each REPORTING peer's direct connections. Each
+// item yields one LSA: a self-description carries no edges unless the request
+// also contains that peer's conn row (normally only the sender reports its
+// own links, so relayed entries install as node-info-only LSAs and their
+// edges arrive through their own syncs). Edges pointing at localPeerID are
+// dropped - the reporter's link to the receiver is real but self-edges never
+// route. Link costs do not travel: the reference conn graph is unweighted, so
+// edges default to cost 1.
+func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID, localPeerID uint32) ([]Advertisement, error) {
 	if req == nil {
-		return Advertisement{}, fmt.Errorf("ospf sync request is nil")
+		return nil, fmt.Errorf("ospf sync request is nil")
 	}
 	if req.GetPeerInfos() != nil && len(req.GetPeerInfos().GetItems()) > MaxAdvertisementPeers+1 {
-		return Advertisement{}, fmt.Errorf("ospf sync request has %d peers, limit is %d", len(req.GetPeerInfos().GetItems()), MaxAdvertisementPeers+1)
+		return nil, fmt.Errorf("ospf sync request has %d peers, limit is %d", len(req.GetPeerInfos().GetItems()), MaxAdvertisementPeers+1)
 	}
 	origin := req.GetMyPeerId()
 	if origin == 0 {
 		origin = fromPeerID
 	}
 	if origin == 0 {
-		return Advertisement{}, fmt.Errorf("ospf sync request origin is zero")
+		return nil, fmt.Errorf("ospf sync request origin is zero")
 	}
 
-	costs := make(map[uint32]uint32)
-	adv := Advertisement{Origin: origin}
-	for _, item := range req.GetPeerInfos().GetItems() {
-		if item.GetPeerId() == 0 {
-			return Advertisement{}, fmt.Errorf("ospf sync request has a zero peer id")
-		}
-		costs[item.GetPeerId()] = item.GetCost()
-		if item.GetPeerId() == origin {
-			adv.Version = uint64(item.GetVersion())
-			adv.PeerRouteID = item.GetPeerRouteId()
-			adv.ProxyCIDRs = append([]string(nil), item.GetProxyCidrs()...)
-			adv.UDPNatType = item.GetUdpNatType()
-			adv.TrustedCredentials = item.GetTrustedCredentialPubkeys()
-			if item.GetLastUpdate() != nil {
-				adv.Timestamp = item.GetLastUpdate().GetSeconds()
-			}
-		}
-	}
-
-	edges := make(map[uint32]uint32)
-	addEdge := func(peer uint32) error {
-		if peer == 0 || peer == origin {
-			return nil
-		}
-		if _, exists := edges[peer]; exists {
-			return nil
-		}
-		cost := costs[peer]
-		if cost == 0 {
-			cost = 1
-		}
-		edges[peer] = cost
-		return nil
-	}
+	// Direct connections reported by each peer, keyed by reporter id.
+	reportedEdges := make(map[uint32][]uint32)
 	switch conn := req.GetConnInfo().(type) {
 	case *peerrpc.SyncRouteInfoRequest_ConnPeerList:
 		for _, row := range conn.ConnPeerList.GetPeerConnInfos() {
-			if row.GetPeerId().GetPeerId() != origin {
-				continue
-			}
+			reporter := row.GetPeerId().GetPeerId()
 			for _, peer := range row.GetConnectedPeerIds() {
-				if err := addEdge(peer); err != nil {
-					return Advertisement{}, err
+				if peer == 0 || peer == reporter {
+					continue
 				}
+				reportedEdges[reporter] = append(reportedEdges[reporter], peer)
 			}
 		}
 	case *peerrpc.SyncRouteInfoRequest_ConnBitmap:
-		for _, peer := range connectedPeersFromBitmap(conn.ConnBitmap, origin) {
-			if err := addEdge(peer); err != nil {
-				return Advertisement{}, err
-			}
+		for _, link := range connectedPairsFromBitmap(conn.ConnBitmap) {
+			reportedEdges[link.reporter] = append(reportedEdges[link.reporter], link.connected)
 		}
 	case nil:
-		// Node-info-only announcement: keep the LSA edges empty.
+		// Node-info-only announcement.
 	default:
-		return Advertisement{}, fmt.Errorf("ospf sync request carries an unknown conn info type")
+		return nil, fmt.Errorf("ospf sync request carries an unknown conn info type")
 	}
 
-	for peer, cost := range edges {
-		adv.Peers = append(adv.Peers, PeerCost{Peer: peer, Cost: cost})
+	buildLSA := func(item *peerrpc.RoutePeerInfo) (Advertisement, error) {
+		adv := Advertisement{
+			Origin:             item.GetPeerId(),
+			Version:            uint64(item.GetVersion()),
+			PeerRouteID:        item.GetPeerRouteId(),
+			ProxyCIDRs:         append([]string(nil), item.GetProxyCidrs()...),
+			UDPNatType:         item.GetUdpNatType(),
+			TrustedCredentials: item.GetTrustedCredentialPubkeys(),
+		}
+		if item.GetLastUpdate() != nil {
+			adv.Timestamp = item.GetLastUpdate().GetSeconds()
+		}
+		for _, peer := range reportedEdges[item.GetPeerId()] {
+			if peer == localPeerID {
+				continue
+			}
+			adv.Peers = append(adv.Peers, PeerCost{Peer: peer, Cost: 1})
+		}
+		sort.Slice(adv.Peers, func(i, j int) bool { return adv.Peers[i].Peer < adv.Peers[j].Peer })
+		if _, _, err := validatedAdvertisement(adv); err != nil {
+			return Advertisement{}, err
+		}
+		return adv, nil
 	}
-	sort.Slice(adv.Peers, func(i, j int) bool { return adv.Peers[i].Peer < adv.Peers[j].Peer })
-	if _, _, err := validatedAdvertisement(adv); err != nil {
-		return Advertisement{}, err
+
+	var lsas []Advertisement
+	items := req.GetPeerInfos().GetItems()
+	for _, item := range items {
+		if item.GetPeerId() == 0 {
+			return nil, fmt.Errorf("ospf sync request has a zero peer id")
+		}
+		adv, err := buildLSA(item)
+		if err != nil {
+			return nil, err
+		}
+		lsas = append(lsas, adv)
 	}
-	return adv, nil
+	if len(items) == 0 {
+		// No self-descriptions at all: fall back to a sender-only LSA so
+		// the receiver still records the reporter's existence.
+		adv := Advertisement{Origin: origin}
+		for _, peer := range reportedEdges[origin] {
+			if peer == localPeerID {
+				continue
+			}
+			adv.Peers = append(adv.Peers, PeerCost{Peer: peer, Cost: 1})
+		}
+		sort.Slice(adv.Peers, func(i, j int) bool { return adv.Peers[i].Peer < adv.Peers[j].Peer })
+		if _, _, err := validatedAdvertisement(adv); err != nil {
+			return nil, err
+		}
+		lsas = append(lsas, adv)
+	}
+	return lsas, nil
 }
 
-// connectedPeersFromBitmap decodes the reference connection bitmap: bit
-// (i*len+j) set means peer_ids[i] is directly connected to peer_ids[j]; only
-// the origin's row contributes edges.
-func connectedPeersFromBitmap(bitmap *peerrpc.RouteConnBitmap, origin uint32) []uint32 {
+// bitmapLink is one direct connection decoded from a conn bitmap: reporter is
+// directly connected to connected.
+type bitmapLink struct {
+	reporter  uint32
+	connected uint32
+}
+
+// connectedPairsFromBitmap decodes the reference connection bitmap: bit
+// (i*len+j) set means peer_ids[i] is directly connected to peer_ids[j]; both
+// directions of every set bit are reported.
+func connectedPairsFromBitmap(bitmap *peerrpc.RouteConnBitmap) []bitmapLink {
 	if bitmap == nil {
 		return nil
 	}
 	rows := bitmap.GetPeerIds()
-	rowIndex := -1
+	var links []bitmapLink
 	for i, row := range rows {
-		if row.GetPeerId() == origin {
-			rowIndex = i
-			break
+		for j, other := range rows {
+			if i == j {
+				continue
+			}
+			idx := i*len(rows) + j
+			byteIdx := idx / 8
+			if byteIdx >= len(bitmap.GetBitmap()) {
+				continue
+			}
+			if bitmap.GetBitmap()[byteIdx]>>(idx%8)&1 == 1 {
+				links = append(links, bitmapLink{reporter: row.GetPeerId(), connected: other.GetPeerId()})
+			}
 		}
 	}
-	if rowIndex < 0 {
-		return nil
-	}
-	var connected []uint32
-	for j, row := range rows {
-		if j == rowIndex {
-			continue
-		}
-		idx := rowIndex*len(rows) + j
-		byteIdx := idx / 8
-		if byteIdx >= len(bitmap.GetBitmap()) {
-			continue
-		}
-		if bitmap.GetBitmap()[byteIdx]>>(idx%8)&1 == 1 {
-			connected = append(connected, row.GetPeerId())
-		}
-	}
-	return connected
+	return links
 }

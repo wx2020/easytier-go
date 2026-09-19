@@ -102,8 +102,15 @@ func (s *PeerSession) Send(ctx context.Context, packet protocol.Packet) error {
 		packet.Payload = payload
 		packet.Header.Flags |= protocol.FlagEncrypted
 	} else if s.Legacy != nil {
-		if err := s.Legacy.Encrypt(&packet); err != nil {
-			return err
+		// Reference control packets (ping/pong) travel through the peer
+		// connection's own sink and are never encrypted; only data and RPC
+		// packets pass the global encryptor.
+		control := packet.Header.PacketType == protocol.PacketTypePing ||
+			packet.Header.PacketType == protocol.PacketTypePong
+		if !control {
+			if err := s.Legacy.Encrypt(&packet); err != nil {
+				return err
+			}
 		}
 	}
 	return s.Channel.Send(ctx, packet)

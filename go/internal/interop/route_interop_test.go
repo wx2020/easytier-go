@@ -69,11 +69,21 @@ func TestInteropRouteDissemination(t *testing.T) {
 
 	identity := peer.LegacyIdentity{PeerID: 77, NetworkName: network}
 	identity.NetworkSecretDigest = protocol.GenerateDigestFromStrings(network, secret)
+	// The reference encrypts RPC traffic with keys derived from the network
+	// secret by default; match it so both directions decrypt.
+	key128, key256 := protocol.DeriveLegacyKeys(secret)
+	cipher, err := peer.NewLegacyCipher("aes-gcm", key128, key256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	node, err := core.ListenWithOptions(core.NodeOptions{
 		Address: "127.0.0.1:0",
 		PeerManager: peer.PeerConnectionManagerConfig{
 			LocalPeerID:    identity.PeerID,
 			LegacyIdentity: identity,
+			// Decrypt the oracle's encrypted RPC packets and encrypt ours with
+			// the same derived key (the reference encrypts by default).
+			LegacyCipher: cipher,
 			// Keepalive traffic keeps the oracle from pruning the
 			// connection as idle before the LSA exchange completes.
 			PingerEnabled: true,

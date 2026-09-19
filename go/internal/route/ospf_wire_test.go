@@ -12,8 +12,8 @@ import (
 	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
-// The protobuf envelope must round-trip a Go LSA losslessly: origin, version,
-// timestamp, proxy CIDRs and every link cost survive the reference schema.
+// schema: origin, version, timestamp, proxy CIDRs and NAT type survive;
+// link costs do not travel (the reference conn graph is unweighted).
 func TestSyncRequestRoundTrip(t *testing.T) {
 	advertisement := Advertisement{
 		Origin:     7,
@@ -38,10 +38,14 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 	if err := proto.Unmarshal(wire, decoded); err != nil {
 		t.Fatal(err)
 	}
-	got, err := advertisementFromSyncRequest(decoded, 99)
+	lsas, err := advertisementsFromSyncRequest(decoded, 99, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(lsas) != 1 {
+		t.Fatalf("decoding must yield exactly the origin LSA, got %d", len(lsas))
+	}
+	got := lsas[0]
 	if got.Origin != advertisement.Origin || got.Version != advertisement.Version {
 		t.Fatalf("origin/version = %d/%d, want %d/%d", got.Origin, got.Version, advertisement.Origin, advertisement.Version)
 	}
@@ -55,8 +59,11 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 		t.Fatalf("edges = %d, want %d", len(got.Peers), len(advertisement.Peers))
 	}
 	for i, peer := range advertisement.Peers {
-		if got.Peers[i].Peer != peer.Peer || got.Peers[i].Cost != peer.Cost {
-			t.Fatalf("edge %d = %+v, want %+v", i, got.Peers[i], peer)
+		if got.Peers[i].Peer != peer.Peer {
+			t.Fatalf("edge %d = %+v, want peer %d", i, got.Peers[i], peer.Peer)
+		}
+		if got.Peers[i].Cost != 1 {
+			t.Fatalf("edge %d cost = %d, want the unweighted fallback 1", i, got.Peers[i].Cost)
 		}
 	}
 	if len(got.ProxyCIDRs) != len(advertisement.ProxyCIDRs) {
@@ -65,8 +72,10 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 }
 
 // The request must decode as the reference message shape: my_peer_id,
-// my_session_id, is_initiator, the origin self-description entry (cost 0) and
-// one conn-peer-list row for the origin's links.
+// my_session_id, is_initiator, exactly ONE peer-info item (the origin
+// self-description; fabricated entries for neighbors would trip the
+// reference duplicate detection) and one conn-peer-list row with the
+// origin's links.
 func TestSyncRequestReferenceShape(t *testing.T) {
 	advertisement := Advertisement{
 		Origin:  5,
@@ -81,8 +90,8 @@ func TestSyncRequestReferenceShape(t *testing.T) {
 		t.Fatalf("envelope = %+v", request)
 	}
 	items := request.GetPeerInfos().GetItems()
-	if len(items) != 2 {
-		t.Fatalf("peer info entries = %d, want origin + 1 link", len(items))
+	if len(items) != 1 {
+		t.Fatalf("peer info entries = %d, want only the origin self-description", len(items))
 	}
 	self := items[0]
 	if self.GetPeerId() != 5 || self.GetCost() != 0 || self.GetVersion() != 2 {
@@ -90,10 +99,6 @@ func TestSyncRequestReferenceShape(t *testing.T) {
 	}
 	if self.GetLastUpdate() == nil || self.GetLastUpdate().GetSeconds() != advertisement.Timestamp {
 		t.Fatalf("origin last_update = %+v", self.GetLastUpdate())
-	}
-	link := items[1]
-	if link.GetPeerId() != 6 || link.GetCost() != 3 {
-		t.Fatalf("link entry = %+v", link)
 	}
 	rows := request.GetConnInfo().(*peerrpc.SyncRouteInfoRequest_ConnPeerList).ConnPeerList.GetPeerConnInfos()
 	if len(rows) != 1 || rows[0].GetPeerId().GetPeerId() != 5 {
@@ -105,7 +110,9 @@ func TestSyncRequestReferenceShape(t *testing.T) {
 }
 
 // A reference-style connection bitmap decodes by row: bit (i*len+j) set means
-// peer_ids[i] is connected to peer_ids[j].
+// peer_ids[i] is connected to peer_ids[j]. Every item is a self-description,
+// so the decoder yields one LSA per item; only the reporting peer's own row
+// contributes edges to its LSA, and edges toward the local peer are dropped.
 func TestAdvertisementFromConnBitmap(t *testing.T) {
 	peerIDs := []*peerrpc.PeerIdVersion{
 		{PeerId: 5}, {PeerId: 6}, {PeerId: 7},
@@ -118,46 +125,63 @@ func TestAdvertisementFromConnBitmap(t *testing.T) {
 		MyPeerId: 5,
 		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{
 			{PeerId: 5, Version: 4},
-			{PeerId: 6, Cost: 8},
+			{PeerId: 6},
 			{PeerId: 7},
 		}},
 		ConnInfo: &peerrpc.SyncRouteInfoRequest_ConnBitmap{
 			ConnBitmap: &peerrpc.RouteConnBitmap{PeerIds: peerIDs, Bitmap: bitmap},
 		},
 	}
-	got, err := advertisementFromSyncRequest(request, 5)
+	lsas, err := advertisementsFromSyncRequest(request, 5, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Peers) != 2 {
-		t.Fatalf("edges = %+v", got.Peers)
+	if len(lsas) != 3 {
+		t.Fatalf("LSAs = %d, want one per self-description", len(lsas))
 	}
-	if got.Peers[0].Peer != 6 || got.Peers[0].Cost != 8 {
-		t.Fatalf("edge 0 = %+v", got.Peers[0])
+	if len(lsas[0].Peers) != 2 || lsas[0].Peers[0].Peer != 6 || lsas[0].Peers[1].Peer != 7 {
+		t.Fatalf("origin edges = %+v", lsas[0].Peers)
 	}
-	if got.Peers[1].Peer != 7 || got.Peers[1].Cost != 1 {
-		t.Fatalf("edge 1 = %+v (unknown cost must fall back to 1)", got.Peers[1])
+	for _, edge := range lsas[0].Peers {
+		if edge.Cost != 1 {
+			t.Fatalf("edge = %+v, want the unweighted fallback 1", edge)
+		}
+	}
+	if len(lsas[1].Peers) != 0 || len(lsas[2].Peers) != 0 {
+		t.Fatalf("relayed self-descriptions must be node-info-only: %+v %+v", lsas[1], lsas[2])
+	}
+
+	// The receiver's own id never appears as an edge: the link to the
+	// receiver is real but self-edges never route.
+	lsas, err = advertisementsFromSyncRequest(request, 5, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edge := range lsas[0].Peers {
+		if edge.Peer == 6 {
+			t.Fatalf("local peer edge must be dropped: %+v", lsas[0].Peers)
+		}
 	}
 }
 
-// Missing conn info degrades to a node-info-only LSA.
+// Missing conn info degrades to node-info-only LSAs.
 func TestAdvertisementFromNodeInfoOnly(t *testing.T) {
 	request := &peerrpc.SyncRouteInfoRequest{
 		MyPeerId:  3,
 		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{{PeerId: 3, Version: 1}}},
 	}
-	got, err := advertisementFromSyncRequest(request, 3)
+	lsas, err := advertisementsFromSyncRequest(request, 3, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Origin != 3 || got.Version != 1 || len(got.Peers) != 0 {
-		t.Fatalf("LSA = %+v", got)
+	if len(lsas) != 1 || lsas[0].Origin != 3 || lsas[0].Version != 1 || len(lsas[0].Peers) != 0 {
+		t.Fatalf("LSAs = %+v", lsas)
 	}
 }
 
 // Zero origins and oversized payloads must be rejected.
 func TestSyncRequestValidation(t *testing.T) {
-	if _, err := advertisementFromSyncRequest(&peerrpc.SyncRouteInfoRequest{}, 0); err == nil {
+	if _, err := advertisementsFromSyncRequest(&peerrpc.SyncRouteInfoRequest{}, 0, 0); err == nil {
 		t.Fatal("zero origin must fail")
 	}
 	oversized := &peerrpc.SyncRouteInfoRequest{MyPeerId: 1}
@@ -166,7 +190,7 @@ func TestSyncRequestValidation(t *testing.T) {
 		items[i] = &peerrpc.RoutePeerInfo{PeerId: uint32(i + 1)}
 	}
 	oversized.PeerInfos = &peerrpc.RoutePeerInfos{Items: items}
-	if _, err := advertisementFromSyncRequest(oversized, 1); err == nil {
+	if _, err := advertisementsFromSyncRequest(oversized, 1, 0); err == nil {
 		t.Fatal("oversized peer list must fail")
 	}
 }
