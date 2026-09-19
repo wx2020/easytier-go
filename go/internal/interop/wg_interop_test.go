@@ -133,3 +133,20 @@ func initiatorKeepaliveOpen(datagram []byte) ([]byte, error) {
 	}
 	return nil, os.ErrInvalid
 }
+
+// waitForUDPAddr polls until a UDP socket answers (a UDP "connection"
+// always succeeds locally, so this only proves the local resolver accepted
+// the address; the real readiness signal is the oracle answering our
+// handshake within the test's own deadlines).
+func waitForUDPAddr(addr string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.Dial("udp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
