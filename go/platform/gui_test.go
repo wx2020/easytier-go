@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -191,7 +192,7 @@ func TestGUILogOptions(t *testing.T) {
 	if _, err := RenderGUILogConfig(opts); err != nil {
 		t.Fatal(err)
 	}
-	if opts.LogFilePath() != "/tmp/logs/easytier.log" {
+	if filepath.ToSlash(opts.LogFilePath()) != "/tmp/logs/easytier.log" {
 		t.Fatalf("log path %s", opts.LogFilePath())
 	}
 	for _, osName := range []string{"linux", "darwin", "windows", "android"} {
