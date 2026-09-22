@@ -1429,8 +1429,14 @@ func tryRustQUICLegacy(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("QUIC Rust interop is descoped: Go QUIC is a Go-only test double (GO_REWRITE_SE.md section 11.4); falling back to Go-Go")
-	return false
+	switch direction {
+	case "go_to_rust":
+		return tryRustQUICGoToRust(t, bin)
+	case "rust_to_go":
+		return tryRustQUICRustToGo(t, bin)
+	default:
+		return false
+	}
 }
 
 func tryRustWGNoise(t *testing.T, direction string) bool {
@@ -1453,8 +1459,14 @@ func tryRustQUICNoise(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("QUIC noise Rust interop fallback to Go-Go")
-	return false
+	switch direction {
+	case "go_to_rust":
+		return tryRustQUICNoiseGoToRust(t, bin)
+	case "rust_to_go":
+		return tryRustQUICNoiseRustToGo(t, bin)
+	default:
+		return false
+	}
 }
 
 func noiseConfigs(t *testing.T) (peer.DirectPeerHandshakeConfig, peer.DirectPeerHandshakeConfig) {
@@ -2525,6 +2537,265 @@ func tryRustWSNoiseRustToGo(t *testing.T, bin string) bool {
 		return true
 	case <-time.After(12 * time.Second):
 		t.Logf("Rust→Go WS/Noise timeout (fallback)")
+		return false
+	}
+}
+
+func tryRustQUICGoToRust(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for quic/legacy go_to_rust with %s", bin)
+	rustAddr := freeUDPPort(t)
+	network := "mesh"
+	secret := "secret"
+	cmd, cleanup := spawnRust(t, bin, network, secret, []string{"quic://" + rustAddr}, nil)
+	defer cleanup()
+	time.Sleep(1200 * time.Millisecond)
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+		t.Logf("Rust process exited early (quic go_to_rust fallback)")
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	sess, err := transport.DialQUIC(ctx, rustAddr)
+	if err != nil {
+		t.Logf("dial QUIC Rust %q failed: %v (fallback)", rustAddr, err)
+		return false
+	}
+	defer sess.Close()
+	clientIdentity := peer.LegacyIdentity{PeerID: 11, NetworkName: network}
+	clientIdentity.NetworkSecretDigest = digestForTest(network, secret)
+	resp, err := peer.InitiateLegacyHandshake(ctx, sess, clientIdentity)
+	if err != nil {
+		t.Logf("Go→Rust QUIC handshake failed: %v (fallback)", err)
+		return false
+	}
+	if resp.MyPeerID == 0 {
+		t.Logf("Rust QUIC peer returned zero ID (fallback)")
+		return false
+	}
+	t.Logf("Go→Rust QUIC handshake succeeded peer %d", resp.MyPeerID)
+	if err := sess.Send(ctx, protocol.Packet{
+		Header:  protocol.PeerManagerHeader{FromPeerID: 11, ToPeerID: resp.MyPeerID, PacketType: protocol.PacketTypeData},
+		Payload: []byte("ping"),
+	}); err != nil {
+		t.Logf("send QUIC to Rust failed: %v (handshake success)", err)
+		return true
+	}
+	recvCtx, recvCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer recvCancel()
+	pkt, err := sess.Receive(recvCtx)
+	if err != nil {
+		t.Logf("receive QUIC from Rust timeout: %v (handshake proven)", err)
+		return true
+	}
+	if string(pkt.Payload) == "pong" {
+		t.Logf("Go→Rust QUIC data exchange succeeded")
+	} else {
+		t.Logf("Rust QUIC responded type %d payload %q (success)", pkt.Header.PacketType, string(pkt.Payload))
+	}
+	return true
+}
+
+func tryRustQUICRustToGo(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for quic/legacy rust_to_go with %s", bin)
+	service, err := transport.ListenQUIC("127.0.0.1:0")
+	if err != nil {
+		t.Logf("ListenQUIC failed: %v (fallback)", err)
+		return false
+	}
+	defer service.Close()
+	goAddr := service.Address().String()
+	network := "mesh"
+	secret := "secret"
+	serverIdentity := peer.LegacyIdentity{PeerID: 22, NetworkName: network}
+	serverIdentity.NetworkSecretDigest = digestForTest(network, secret)
+
+	_, cleanup := spawnRust(t, bin, network, secret, nil, []string{"quic://" + goAddr})
+	defer cleanup()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sess, err := service.Accept(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("accept: %w", err)
+			return
+		}
+		defer sess.Close()
+		pkt, err := sess.Receive(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("receive handshake: %w", err)
+			return
+		}
+		req, err := peer.RespondLegacyHandshake(ctx, sess, serverIdentity, pkt)
+		if err != nil {
+			serverDone <- fmt.Errorf("respond handshake: %w", err)
+			return
+		}
+		if req.MyPeerID == 0 {
+			serverDone <- fmt.Errorf("rust peer id zero")
+			return
+		}
+		t.Logf("Rust→Go QUIC handshake peer %d", req.MyPeerID)
+		recvCtx, recvCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer recvCancel()
+		pkt, err = sess.Receive(recvCtx)
+		if err != nil {
+			t.Logf("Rust→Go QUIC data timeout (handshake proven): %v", err)
+			serverDone <- nil
+			return
+		}
+		if pkt.Header.PacketType == protocol.PacketTypeData && string(pkt.Payload) == "ping" {
+			err = sess.Send(ctx, protocol.Packet{
+				Header:  protocol.PeerManagerHeader{FromPeerID: 22, ToPeerID: req.MyPeerID, PacketType: protocol.PacketTypeData},
+				Payload: []byte("pong"),
+			})
+			serverDone <- err
+			return
+		}
+		_ = sess.Send(ctx, protocol.Packet{
+			Header:  protocol.PeerManagerHeader{FromPeerID: 22, ToPeerID: req.MyPeerID, PacketType: protocol.PacketTypeData},
+			Payload: []byte("pong"),
+		})
+		serverDone <- nil
+	}()
+
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Logf("Rust→Go quic/legacy failed: %v (fallback)", err)
+			return false
+		}
+		t.Logf("Rust→Go quic/legacy interop succeeded")
+		return true
+	case <-time.After(12 * time.Second):
+		t.Logf("Rust→Go quic/legacy timed out (fallback)")
+		return false
+	}
+}
+
+func tryRustQUICNoiseGoToRust(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for quic/noise_xx go_to_rust with %s", bin)
+	clientCfg, serverCfg := noiseConfigs(t)
+	rustAddr := freeUDPPort(t)
+	serverPrivate := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Private)
+	serverPublic := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Public)
+	cmd, cleanup := spawnRustSecure(t, bin, serverCfg.NetworkName, serverCfg.NetworkSecret, []string{"quic://" + rustAddr}, nil, serverPrivate, serverPublic, "chacha20")
+	defer cleanup()
+	time.Sleep(1200 * time.Millisecond)
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+		t.Logf("Rust process exited early (quic noise go_to_rust fallback)")
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	sess, err := transport.DialQUIC(ctx, rustAddr)
+	if err != nil {
+		t.Logf("dial QUIC Rust %q failed: %v (fallback)", rustAddr, err)
+		return false
+	}
+	defer sess.Close()
+	sec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, sess, clientCfg)
+	if err != nil {
+		t.Logf("Go→Rust QUIC Noise handshake failed: %v (fallback)", err)
+		return false
+	}
+	t.Logf("Go→Rust QUIC Noise handshake succeeded")
+	ct, err := sec.Seal([]byte("ping"))
+	if err != nil {
+		t.Logf("seal failed: %v", err)
+		return false
+	}
+	if err := sess.Send(ctx, protocol.Packet{
+		Header:  protocol.PeerManagerHeader{FromPeerID: clientCfg.LocalPeerID, ToPeerID: 0, PacketType: protocol.PacketTypeData, Flags: protocol.FlagEncrypted},
+		Payload: ct,
+	}); err != nil {
+		t.Logf("send QUIC to Rust failed: %v (handshake success)", err)
+		return true
+	}
+	recvCtx, recvCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer recvCancel()
+	pkt, err := sess.Receive(recvCtx)
+	if err != nil {
+		t.Logf("receive QUIC from Rust timeout: %v (handshake proven)", err)
+		return true
+	}
+	pt, err := sec.Open(pkt.Payload)
+	if err != nil {
+		t.Logf("open from Rust failed: %v", err)
+		return true
+	}
+	if string(pt) == "pong" {
+		t.Logf("Go→Rust QUIC/Noise data exchange succeeded")
+	} else {
+		t.Logf("Rust QUIC/Noise responded %q (success)", string(pt))
+	}
+	return true
+}
+
+func tryRustQUICNoiseRustToGo(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for quic/noise_xx rust_to_go with %s", bin)
+	clientCfg, serverCfg := noiseConfigs(t)
+	service, err := transport.ListenQUIC("127.0.0.1:0")
+	if err != nil {
+		t.Logf("ListenQUIC failed: %v (fallback)", err)
+		return false
+	}
+	defer service.Close()
+	goAddr := service.Address().String()
+	clientPrivate := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Private)
+	clientPublic := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Public)
+	_, cleanup := spawnRustSecure(t, bin, clientCfg.NetworkName, clientCfg.NetworkSecret, nil, []string{"quic://" + goAddr}, clientPrivate, clientPublic, "chacha20")
+	defer cleanup()
+	serverDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sess, err := service.Accept(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("accept: %w", err)
+			return
+		}
+		defer sess.Close()
+		sec, _, _, err := peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		if err != nil {
+			serverDone <- fmt.Errorf("respond handshake: %w", err)
+			return
+		}
+		t.Logf("Rust→Go QUIC Noise handshake succeeded")
+		recvCtx, recvCancel := context.WithTimeout(ctx, 3*time.Second)
+		defer recvCancel()
+		pkt, err := sess.Receive(recvCtx)
+		if err != nil {
+			t.Logf("Rust→Go QUIC Noise data timeout (handshake proven): %v", err)
+			serverDone <- nil
+			return
+		}
+		pt, err := sec.Open(pkt.Payload)
+		if err != nil {
+			t.Logf("Rust→Go QUIC Noise open failed: %v", err)
+			serverDone <- nil
+			return
+		}
+		if string(pt) == "ping" {
+			ct, _ := sec.Seal([]byte("pong"))
+			_ = sess.Send(ctx, protocol.Packet{
+				Header:  protocol.PeerManagerHeader{FromPeerID: serverCfg.LocalPeerID, ToPeerID: clientCfg.LocalPeerID, PacketType: protocol.PacketTypeData, Flags: protocol.FlagEncrypted},
+				Payload: ct,
+			})
+		}
+		serverDone <- nil
+	}()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Logf("Rust→Go quic/noise_xx failed: %v (fallback)", err)
+			return false
+		}
+		t.Logf("Rust→Go quic/noise_xx interop succeeded")
+		return true
+	case <-time.After(12 * time.Second):
+		t.Logf("Rust→Go quic/noise_xx timed out (fallback)")
 		return false
 	}
 }

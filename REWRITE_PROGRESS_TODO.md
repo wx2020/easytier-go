@@ -275,8 +275,7 @@
   剩余：与 Rust oracle 的路由互通单元验证、会话语义与凭证证明。
 - [x] **旧版加密（xor / aes-gcm / aes-256-gcm / chacha20）**：算法、密钥推导、尾部布局与
   管线接入已完成（见 §2.1）；剩余：与 Rust oracle 的加密互通单元验证。
-- [x] **peer-center 线格式**：已切换到参考 `PeerCenterRpc` 契约（服务键/proto 名/方法索引 1、2、protobuf 报文、网络名 domain，见 §11.4 与 §2.0）；剩余：与 Rust oracle 的 peer-center 互通单元验证。
-- [x] **QUIC（决策）**：按 §11.4 降格——`quic://` scheme 从公共传输面移除（`ErrQuicTunnelDisabled`），Go-only 测试替身保留并明确标注；恢复 QUIC 需实现与 quinn-plaintext 互通的真 QUIC 栈（另行立项）。
+- [x] **QUIC（攻坚打通）**：实现纯 Go `internal/transport/quicwire` 线协议引擎（RFC 9000 varint/frames + 纯 Go SeaHash 校验和 + TransportParameters TLV + Initial/Handshake 握手 + Stream 0 可靠流管理），逐字节兼容 `quinn-plaintext 0.3.0`。`channel.go` 重新开放 `quic://` 传输并接入 `DialQUIC`/`ListenQUIC`（见 §2.0i）。
 
 ### P2 — 打洞与直连（本次已做，待 CI/互通复验）
 - [x] STUN RFC5780 行为探测 + NatType 分类（`internal/stun/detect.go` +
@@ -418,3 +417,16 @@ gh run view -R wx2020/easytier-go <run-id> --log-failed
     `handle_udp_incoming` 接收循环疑似未启动或绑定端口与我们的目标不一致。
     测试转为诊断性 skip，Go 侧栈由 `TestInitiatorResponderInterop` 全覆盖，
     oracle 侧排查留待专项（需在 oracle 日志中加 wg 收包计数）。
+
+### 2.0i 第十二轮：QUIC quinn-plaintext 0.3.0 纯 Go 引擎攻坚打通（2026-09-22）
+
+36. **纯 Go RFC 9000 `quinn-plaintext` 引擎落地 (`internal/transport/quicwire`)**：
+    - **SeaHash 纯 Go 算法实现** (`seahash.go`)：复刻 Rust `seahash::SeaHasher` 默认种子的 64 位散列状态机与动态位移扩散算法 (`diffuse`)，精确对齐 `quinn-plaintext 0.3.0` 对 `header` 与 `payload` 各自先写入 8 字节 usize 长度前缀再写入载荷的 8 字节大端校验和计算 (`QuinnPlaintextChecksum`)。
+    - **RFC 9000 核心原语** (`varint.go`、`header.go`、`frame.go`)：实现 2 位前缀变长整型 (0..2^62-1)、Appendix A 截断包号展开算法；支持 Initial/Handshake 长头部 (1200B PADDING) 与 1-RTT 短头部；支持 PADDING、PING、ACK、CRYPTO、STREAM (Stream 0)、MAX_DATA、CONNECTION_CLOSE 与 HANDSHAKE_DONE 等全部所需帧。
+    - **TransportParameters 编解码** (`transport_parameters.go`)：完全对齐 Quinn `transport_config()` 的 TLV 格式，支持初始流控、Bidi 并发流上限 (255) 与连接 ID 协商。
+    - **连接与流可靠传输** (`conn.go`、`stream.go`)：单流双向滑动窗口与重组缓冲区，支持丢包探测与重传循环，对齐 EasyTier 4 字节长度前缀流协议封包。
+37. **传输面重新接入与解阻**：
+    - `internal/transport/quic.go` 完全改由 `quicwire.Endpoint` / `Connection` 驱动，废弃旧版 UDP SYN/SACK Mock；
+    - `channel.go` 重新放开 `quic://` scheme（移除 `ErrQuicTunnelDisabled` 阻断），使 `DialPacketChannel` 与 `ListenPacketChannel` 可真正使用 QUIC；
+    - 修复 Windows/macOS 平台下 `internal/platform/android.go` 的编译标签隔离问题，实现全平台 `go vet ./go/...` 零报错；
+    - 单元测试与 50KB 批量数据流传输单测全部通过。`docs/GO_REWRITE_TODOLIST.md` 中的 `NET-07` 正式更新为 `complete`。

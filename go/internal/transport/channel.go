@@ -52,7 +52,7 @@ func DialPacketChannel(ctx context.Context, scheme, address string, maxFrame int
 	case "wg":
 		return DialWG(ctx, address, opts...)
 	case "quic":
-		return nil, ErrQuicTunnelDisabled
+		return DialQUIC(ctx, address, opts...)
 	case "faketcp", "fake-tcp":
 		return DialFakeTCP(ctx, address, maxFrame, opts...)
 	case "ring":
@@ -114,7 +114,12 @@ func ListenPacketChannelWithContext(ctx context.Context, scheme, address string,
 		go func() { _ = svc.Serve(ctx) }()
 		return &wgPacketListener{service: svc}, nil
 	case "quic":
-		return nil, ErrQuicTunnelDisabled
+		svc, err := ListenQUIC(address, opts...)
+		if err != nil {
+			return nil, err
+		}
+		go func() { _ = svc.Serve(ctx) }()
+		return &quicPacketListener{service: svc}, nil
 	case "faketcp", "fake-tcp":
 		svc, err := ListenFakeTCP(address, maxFrame, opts...)
 		if err != nil {

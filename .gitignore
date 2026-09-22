@@ -47,3 +47,4 @@ easytier-gui/src-tauri/*.sys
 # Go build outputs (do not push binaries)
 /easytier-core
 /go/ffi/ffi
+.gradle/
