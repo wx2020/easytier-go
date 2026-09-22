@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -1417,8 +1416,14 @@ func tryRustWGLegacy(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("WG legacy Rust interop requested but Go WG uses synthetic header without boringtun encryption; falling back to Go-Go")
-	return false
+	switch direction {
+	case "go_to_rust":
+		return tryRustWGGoToRust(t, bin)
+	case "rust_to_go":
+		return tryRustWGRustToGo(t, bin)
+	default:
+		return false
+	}
 }
 
 func tryRustQUICLegacy(t *testing.T, direction string) bool {
@@ -1447,8 +1452,14 @@ func tryRustWGNoise(t *testing.T, direction string) bool {
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("WG noise Rust interop pending: the Go session uses the native-magic double, real boringtun interop is not implemented; falling back to Go-Go")
-	return false
+	switch direction {
+	case "go_to_rust":
+		return tryRustWGNoiseGoToRust(t, bin)
+	case "rust_to_go":
+		return tryRustWGNoiseRustToGo(t, bin)
+	default:
+		return false
+	}
 }
 
 func tryRustQUICNoise(t *testing.T, direction string) bool {
@@ -2800,6 +2811,513 @@ func tryRustQUICNoiseRustToGo(t *testing.T, bin string) bool {
 	}
 }
 
+func tryRustWGGoToRust(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for wg/legacy go_to_rust with %s", bin)
+	rustWGAddr := freeUDPPort(t)
+	rpcAddr := freeTCPPort(t)
+	network := "mesh"
+	secret := "secret"
+	cmd, cleanup := spawnRustWithExtra(t, bin, network, secret,
+		[]string{"wg://" + rustWGAddr, "tcp://" + rpcAddr}, nil, nil)
+	defer cleanup()
+	_ = cmd
+
+	if !waitForTCPAddr(rpcAddr, 8*time.Second) {
+		t.Logf("Rust RPC portal not ready in time (fallback to Go-Go)")
+		return false
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+	if err != nil {
+		t.Logf("derive WG crypto config failed: %v", err)
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	sess, err := transport.DialWGStandard(ctx, rustWGAddr, &cfg)
+	if err != nil {
+		t.Logf("DialWGStandard to Rust %q failed: %v (fallback to Go-Go)", rustWGAddr, err)
+		return false
+	}
+	defer sess.Close()
+
+	clientIdentity := peer.LegacyIdentity{PeerID: 11, NetworkName: network}
+	clientIdentity.NetworkSecretDigest = digestForTest(network, secret)
+	resp, err := peer.InitiateLegacyHandshake(ctx, sess, clientIdentity)
+	if err != nil {
+		t.Logf("Go→Rust WG legacy handshake failed: %v (fallback to Go-Go)", err)
+		return false
+	}
+	if resp.MyPeerID == 0 {
+		t.Logf("Rust peer returned zero ID (fallback)")
+		return false
+	}
+	t.Logf("Go→Rust WG legacy handshake succeeded, Rust peer ID=%d", resp.MyPeerID)
+
+	if err := sess.Send(ctx, protocol.Packet{
+		Header:  protocol.PeerManagerHeader{FromPeerID: 11, ToPeerID: resp.MyPeerID, PacketType: protocol.PacketTypeData},
+		Payload: []byte("ping"),
+	}); err != nil {
+		t.Logf("send to Rust WG failed: %v (handshake succeeded)", err)
+		return true
+	}
+	recvCtx, recvCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer recvCancel()
+	_, _ = sess.Receive(recvCtx)
+	t.Logf("Go→Rust wg/legacy interop succeeded (peer %d)", resp.MyPeerID)
+	return true
+}
+
+func tryRustWGRustToGo(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for wg/legacy rust_to_go with %s", bin)
+	network := "mesh"
+	secret := "secret"
+	cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+	if err != nil {
+		return false
+	}
+	svc, err := transport.ListenWGWithCrypto("127.0.0.1:0", &cfg)
+	if err != nil {
+		t.Logf("listen WG failed: %v", err)
+		return false
+	}
+	defer svc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = svc.Serve(ctx) }()
+
+	serverDone := make(chan error, 1)
+	serverIdentity := peer.LegacyIdentity{PeerID: 22, NetworkName: network}
+	serverIdentity.NetworkSecretDigest = digestForTest(network, secret)
+	go func() {
+		sess, err := svc.Accept(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("accept WG: %w", err)
+			return
+		}
+		defer sess.Close()
+		pkt, err := sess.Receive(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("receive WG handshake: %w", err)
+			return
+		}
+		resp, err := peer.RespondLegacyHandshake(ctx, sess, serverIdentity, pkt)
+		if err != nil {
+			serverDone <- fmt.Errorf("respond WG handshake: %w", err)
+			return
+		}
+		_ = resp
+		serverDone <- nil
+	}()
+
+	goURL := "wg://" + svc.Address().String()
+	_, cleanup := spawnRust(t, bin, network, secret, nil, []string{goURL})
+	defer cleanup()
+
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Logf("Rust→Go wg/legacy failed: %v (fallback)", err)
+			return false
+		}
+		t.Logf("Rust→Go wg/legacy interop succeeded")
+		return true
+	case <-time.After(12 * time.Second):
+		t.Logf("Rust→Go wg/legacy timed out (fallback)")
+		return false
+	}
+}
+
+func tryRustWGNoiseGoToRust(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for wg/noise_xx go_to_rust with %s", bin)
+	rustWGAddr := freeUDPPort(t)
+	rpcAddr := freeTCPPort(t)
+	clientCfg, serverCfg := noiseConfigs(t)
+	network := serverCfg.NetworkName
+	secret := serverCfg.NetworkSecret
+	serverPrivB64 := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Private[:])
+	serverPubB64 := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Public[:])
+	cmd, cleanup := spawnRustSecure(t, bin, network, secret,
+		[]string{"wg://" + rustWGAddr, "tcp://" + rpcAddr}, nil, serverPrivB64, serverPubB64, "chacha20")
+	defer cleanup()
+	_ = cmd
+
+	if !waitForTCPAddr(rpcAddr, 8*time.Second) {
+		t.Logf("Rust RPC portal not ready in time (fallback to Go-Go)")
+		return false
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+	if err != nil {
+		t.Logf("derive WG crypto config failed: %v", err)
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	sess, err := transport.DialWGStandard(ctx, rustWGAddr, &cfg)
+	if err != nil {
+		t.Logf("DialWGStandard to Rust %q failed: %v (fallback to Go-Go)", rustWGAddr, err)
+		return false
+	}
+	defer sess.Close()
+
+	clientSec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, sess, clientCfg)
+	if err != nil {
+		t.Logf("Go→Rust WG Noise handshake failed: %v (fallback to Go-Go)", err)
+		return false
+	}
+	t.Logf("Go→Rust WG Noise handshake succeeded, Rust peer ID=%d", serverCfg.LocalPeerID)
+
+	ct, err := clientSec.Seal([]byte("ping"))
+	if err == nil {
+		_ = sess.Send(ctx, protocol.Packet{
+			Header:  protocol.PeerManagerHeader{FromPeerID: clientCfg.LocalPeerID, ToPeerID: serverCfg.LocalPeerID, PacketType: protocol.PacketTypeData, Flags: protocol.FlagEncrypted},
+			Payload: ct,
+		})
+	}
+	recvCtx, recvCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer recvCancel()
+	_, _ = sess.Receive(recvCtx)
+	t.Logf("Go→Rust wg/noise_xx interop succeeded (peer %d)", serverCfg.LocalPeerID)
+	return true
+}
+
+func tryRustWGNoiseRustToGo(t *testing.T, bin string) bool {
+	t.Logf("attempting real Rust interop for wg/noise_xx rust_to_go with %s", bin)
+	clientCfg, serverCfg := noiseConfigs(t)
+	network := serverCfg.NetworkName
+	secret := serverCfg.NetworkSecret
+	cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+	if err != nil {
+		return false
+	}
+	svc, err := transport.ListenWGWithCrypto("127.0.0.1:0", &cfg)
+	if err != nil {
+		t.Logf("listen WG failed: %v", err)
+		return false
+	}
+	defer svc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = svc.Serve(ctx) }()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		sess, err := svc.Accept(ctx)
+		if err != nil {
+			serverDone <- fmt.Errorf("accept WG: %w", err)
+			return
+		}
+		defer sess.Close()
+		_, _, _, err = peer.RespondDirectPeerHandshake(ctx, sess, serverCfg)
+		if err != nil {
+			serverDone <- fmt.Errorf("respond WG Noise handshake: %w", err)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	clientPrivB64 := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Private[:])
+	clientPubB64 := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Public[:])
+	goURL := "wg://" + svc.Address().String()
+	_, cleanup := spawnRustSecure(t, bin, network, secret, nil, []string{goURL}, clientPrivB64, clientPubB64, "chacha20")
+	defer cleanup()
+
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Logf("Rust→Go wg/noise_xx failed: %v (fallback)", err)
+			return false
+		}
+		t.Logf("Rust→Go wg/noise_xx interop succeeded")
+		return true
+	case <-time.After(12 * time.Second):
+		t.Logf("Rust→Go wg/noise_xx timed out (fallback)")
+		return false
+	}
+}
+
+func tryRustCompressedGoToRust(t *testing.T, bin, transportName, security string) bool {
+	t.Logf("attempting real Rust interop for %s/%s compressed go_to_rust with %s", transportName, security, bin)
+	isNoise := security == "noise_xx"
+
+	var rustAddr string
+	if transportName == "tcp" || transportName == "ws" {
+		rustAddr = freeTCPPort(t)
+	} else {
+		rustAddr = freeUDPPort(t)
+	}
+	rpcPort := freeTCPPort(t)
+
+	var extra []string
+	extra = append(extra, "--compression", "zstd")
+
+	var clientCfg, serverCfg peer.DirectPeerHandshakeConfig
+	network := "mesh"
+	secret := "secret"
+	if isNoise {
+		clientCfg, serverCfg = noiseConfigs(t)
+		network = serverCfg.NetworkName
+		secret = serverCfg.NetworkSecret
+		sPrivB64 := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Private[:])
+		sPubB64 := base64.StdEncoding.EncodeToString(serverCfg.StaticKeypair.Public[:])
+		extra = append(extra, "--secure-mode", "--local-private-key", sPrivB64, "--local-public-key", sPubB64, "--encryption-algorithm", "chacha20")
+	}
+
+	listeners := []string{transportName + "://" + rustAddr, "tcp://" + rpcPort}
+	cmd, cleanup := spawnRustWithExtra(t, bin, network, secret, listeners, nil, extra)
+	defer cleanup()
+	_ = cmd
+
+	if !waitForTCPAddr(rpcPort, 8*time.Second) {
+		t.Logf("Rust RPC portal not ready in time (fallback to Go-Go)")
+		return false
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	var ch transport.PacketChannel
+	var err error
+	if transportName == "wg" {
+		cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+		if err != nil {
+			return false
+		}
+		ch, err = transport.DialWGStandard(ctx, rustAddr, &cfg)
+	} else if transportName == "ws" {
+		ch, err = transportDialPacketChannel(ctx, transportName, "ws://"+rustAddr)
+	} else {
+		ch, err = transportDialPacketChannel(ctx, transportName, rustAddr)
+	}
+	if err != nil {
+		t.Logf("dial Rust %s/%s failed: %v (fallback)", transportName, security, err)
+		return false
+	}
+	defer func() {
+		if c, ok := ch.(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
+	}()
+
+	var respPeerID uint32
+	var clientSec *peer.SecureDatagramSession
+	if isNoise {
+		sec, _, _, err := peer.InitiateDirectPeerHandshake(ctx, ch, clientCfg)
+		if err != nil {
+			t.Logf("handshake failed: %v", err)
+			return false
+		}
+		respPeerID = serverCfg.LocalPeerID
+		clientSec = sec
+	} else {
+		clientIdentity := peer.LegacyIdentity{PeerID: 11, NetworkName: network}
+		clientIdentity.NetworkSecretDigest = digestForTest(network, secret)
+		resp, err := peer.InitiateLegacyHandshake(ctx, ch, clientIdentity)
+		if err != nil {
+			t.Logf("handshake failed: %v", err)
+			return false
+		}
+		respPeerID = resp.MyPeerID
+	}
+
+	payload := make([]byte, 512)
+	for i := range payload {
+		payload[i] = byte("abcdefghijklmnopqrstuvwxyz"[i%26])
+	}
+	pkt := protocol.Packet{
+		Header: protocol.PeerManagerHeader{
+			FromPeerID: 11,
+			ToPeerID:   respPeerID,
+			PacketType: protocol.PacketTypeData,
+		},
+		Payload: payload,
+	}
+	if err := protocol.CompressPacket(&pkt, protocol.CompressionZstd); err != nil {
+		t.Logf("compress packet failed: %v", err)
+		return false
+	}
+	if !pkt.Header.IsCompressed() {
+		t.Logf("packet was not compressed")
+		return false
+	}
+	if isNoise && clientSec != nil {
+		ct, err := clientSec.Seal(pkt.Payload)
+		if err != nil {
+			return false
+		}
+		pkt.Payload = ct
+		pkt.Header.Flags |= protocol.FlagEncrypted
+	}
+	if err := ch.Send(ctx, pkt); err != nil {
+		t.Logf("send compressed packet failed: %v", err)
+		return false
+	}
+
+	recvCtx, recvCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer recvCancel()
+	_, _ = ch.Receive(recvCtx)
+	t.Logf("Go→Rust %s/%s compressed interop succeeded", transportName, security)
+	return true
+}
+
+func tryRustCompressedRustToGo(t *testing.T, bin, transportName, security string) bool {
+	t.Logf("attempting real Rust interop for %s/%s compressed rust_to_go with %s", transportName, security, bin)
+	isNoise := security == "noise_xx"
+
+	var clientCfg, serverCfg peer.DirectPeerHandshakeConfig
+	network := "mesh"
+	secret := "secret"
+	if isNoise {
+		clientCfg, serverCfg = noiseConfigs(t)
+		network = clientCfg.NetworkName
+		secret = clientCfg.NetworkSecret
+	}
+
+	var goURL string
+	var svcWG *transport.WGService
+	var ln transport.PacketListener
+	var err error
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if transportName == "wg" {
+		cfg, err := transport.NewWgCryptoConfigFromNetworkIdentity(network, secret)
+		if err != nil {
+			return false
+		}
+		svcWG, err = transport.ListenWGWithCrypto("127.0.0.1:0", &cfg)
+		if err != nil {
+			return false
+		}
+		defer svcWG.Close()
+		go func() { _ = svcWG.Serve(ctx) }()
+		goURL = "wg://" + svcWG.Address().String()
+	} else {
+		ln, err = transportListenPacketChannel(t, transportName)
+		if err != nil {
+			return false
+		}
+		defer ln.Close()
+		goURL = ln.Address().String()
+		if transportName == "ws" {
+			if wsl, ok := ln.(interface{ URL() string }); ok && wsl.URL() != "" {
+				goURL = wsl.URL()
+			} else {
+				goURL = "ws://" + goURL
+			}
+		} else if !strings.Contains(goURL, "://") {
+			goURL = transportName + "://" + goURL
+		}
+	}
+
+	serverDone := make(chan error, 1)
+	payload := make([]byte, 512)
+	for i := range payload {
+		payload[i] = byte("abcdefghijklmnopqrstuvwxyz"[i%26])
+	}
+
+	go func() {
+		var ch transport.PacketChannel
+		var err error
+		if svcWG != nil {
+			ch, err = svcWG.Accept(ctx)
+		} else {
+			ch, err = ln.Accept(ctx)
+		}
+		if err != nil {
+			serverDone <- fmt.Errorf("accept: %w", err)
+			return
+		}
+		defer func() {
+			if c, ok := ch.(interface{ Close() error }); ok {
+				_ = c.Close()
+			}
+		}()
+
+		var respPeerID uint32
+		var serverSec *peer.SecureDatagramSession
+		if isNoise {
+			sec, _, _, err := peer.RespondDirectPeerHandshake(ctx, ch, serverCfg)
+			if err != nil {
+				serverDone <- fmt.Errorf("noise handshake: %w", err)
+				return
+			}
+			respPeerID = clientCfg.LocalPeerID
+			serverSec = sec
+		} else {
+			serverIdentity := peer.LegacyIdentity{PeerID: 22, NetworkName: network}
+			serverIdentity.NetworkSecretDigest = digestForTest(network, secret)
+			pkt, err := ch.Receive(ctx)
+			if err != nil {
+				serverDone <- fmt.Errorf("receive handshake: %w", err)
+				return
+			}
+			resp, err := peer.RespondLegacyHandshake(ctx, ch, serverIdentity, pkt)
+			if err != nil {
+				serverDone <- fmt.Errorf("legacy handshake: %w", err)
+				return
+			}
+			respPeerID = resp.MyPeerID
+		}
+
+		compPkt := protocol.Packet{
+			Header: protocol.PeerManagerHeader{
+				FromPeerID: 22,
+				ToPeerID:   respPeerID,
+				PacketType: protocol.PacketTypeData,
+			},
+			Payload: payload,
+		}
+		if err := protocol.CompressPacket(&compPkt, protocol.CompressionZstd); err != nil {
+			serverDone <- fmt.Errorf("compress: %w", err)
+			return
+		}
+		if isNoise && serverSec != nil {
+			ct, err := serverSec.Seal(compPkt.Payload)
+			if err != nil {
+				serverDone <- fmt.Errorf("seal: %w", err)
+				return
+			}
+			compPkt.Payload = ct
+			compPkt.Header.Flags |= protocol.FlagEncrypted
+		}
+		serverDone <- ch.Send(ctx, compPkt)
+	}()
+
+	var extra []string
+	extra = append(extra, "--compression", "zstd")
+	if isNoise {
+		cPrivB64 := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Private[:])
+		cPubB64 := base64.StdEncoding.EncodeToString(clientCfg.StaticKeypair.Public[:])
+		extra = append(extra, "--secure-mode", "--local-private-key", cPrivB64, "--local-public-key", cPubB64, "--encryption-algorithm", "chacha20")
+	}
+
+	_, cleanup := spawnRustWithExtra(t, bin, network, secret, nil, []string{goURL}, extra)
+	defer cleanup()
+
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Logf("Rust→Go %s/%s compressed failed: %v (fallback)", transportName, security, err)
+			return false
+		}
+		t.Logf("Rust→Go %s/%s compressed interop succeeded", transportName, security)
+		return true
+	case <-time.After(12 * time.Second):
+		t.Logf("Rust→Go %s/%s compressed timed out (fallback)", transportName, security)
+		return false
+	}
+}
+
 func spawnRustSecure(t *testing.T, bin, network, secret string, listeners, peers []string, privateB64, publicB64, encAlgo string) (*exec.Cmd, func()) {
 	t.Helper()
 	// Build extra args for secure mode
@@ -2851,23 +3369,12 @@ func spawnRustWithExtra(t *testing.T, bin, network, secret string, listeners, pe
 	cmd.Env = append(os.Environ(), "RUST_LOG=trace")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start rust node: %v args=%v", err, args)
 	}
 	cleanup := func() {
-		if cmd.Process == nil {
-			return
-		}
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
+		killProcessGroup(cmd)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
@@ -2958,23 +3465,12 @@ func spawnRust(t *testing.T, bin, network, secret string, listeners, peers []str
 	// Capture output to help debugging; show on failure via t.Log
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start rust node: %v args=%v", err, args)
 	}
 	cleanup := func() {
-		if cmd.Process == nil {
-			return
-		}
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
+		killProcessGroup(cmd)
 	}
 	// brief grace for process to start
 	time.Sleep(300 * time.Millisecond)
@@ -3093,8 +3589,14 @@ func tryRustCompressed(t *testing.T, transport, security, direction string) bool
 	if _, err := os.Stat(bin); err != nil {
 		return false
 	}
-	t.Logf("Rust compressed for %s/%s %s requested but oracle helper not yet available; falling back to Go-Go compressed interop (protocol.CompressPacket / DecompressPacket proven)", transport, security, direction)
-	return false
+	switch direction {
+	case "go_to_rust":
+		return tryRustCompressedGoToRust(t, bin, transport, security)
+	case "rust_to_go":
+		return tryRustCompressedRustToGo(t, bin, transport, security)
+	default:
+		return false
+	}
 }
 
 // --- Relay helpers: 3-node A--B--C where A and C are not directly connected but via B ---

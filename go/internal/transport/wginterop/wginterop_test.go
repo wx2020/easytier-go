@@ -10,6 +10,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/transport/wgtest"
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -395,5 +396,38 @@ func TestInitiatorResponderInterop(t *testing.T) {
 	}
 	if _, err := initiator.ConsumeHandshakeResponse(result.ToNetwork); err != nil {
 		t.Fatalf("rekey response rejected: %v", err)
+	}
+}
+
+func TestInitiatorResponderSameKey(t *testing.T) {
+	priv := protocol.DeriveWGPrivateKey("mesh", "secret")
+	pub, err := PublicKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunn, err := NewTunn(priv, pub, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initiator, err := NewInitiator(priv, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	init, err := initiator.FormatHandshakeInitiation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := tunn.HandleDatagram(nil, init)
+	if result.Kind != KindNetwork || len(result.ToNetwork) != HandshakeRespSize {
+		t.Fatalf("handshake failed: kind=%v, len=%d", result.Kind, len(result.ToNetwork))
+	}
+	session, err := initiator.ConsumeHandshakeResponse(result.ToNetwork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := session.SealData([]byte("same-key-ping"))
+	got := tunn.HandleDatagram(nil, sealed)
+	if got.Kind != KindTunnel || string(got.ToTunnel) != "same-key-ping" {
+		t.Fatalf("data failed: got=%v", got)
 	}
 }

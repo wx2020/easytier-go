@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,8 +17,16 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 )
 
+func shortTempSock(t *testing.T) string {
+	t.Helper()
+	name := fmt.Sprintf("et_%d_%d.sock", os.Getpid(), time.Now().UnixNano()%1000000)
+	p := filepath.Join(os.TempDir(), name)
+	t.Cleanup(func() { _ = os.Remove(p) })
+	return p
+}
+
 func TestUnixPacketChannelRoundTripAndCleanup(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "easytier.sock")
+	path := shortTempSock(t)
 	listener, err := ListenUnix(path, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +88,7 @@ func TestUnixPacketChannelRoundTripAndCleanup(t *testing.T) {
 }
 
 func TestUnixPacketChannelRejectsOversizedSend(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "easytier.sock")
+	path := shortTempSock(t)
 	listener, err := ListenUnix(path, protocol.PeerManagerHeaderSize)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +123,7 @@ func TestUnixPacketChannelRejectsOversizedSend(t *testing.T) {
 }
 
 func TestUnixPacketChannelRejectsMalformedLength(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "easytier.sock")
+	path := shortTempSock(t)
 	listener, err := ListenUnix(path, protocol.PeerManagerHeaderSize)
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +152,7 @@ func TestUnixPacketChannelRejectsMalformedLength(t *testing.T) {
 }
 
 func TestUnixPacketChannelReceiveHonorsCancellation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "easytier.sock")
+	path := shortTempSock(t)
 	listener, err := ListenUnix(path, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +188,7 @@ func TestUnixPacketChannelReceiveHonorsCancellation(t *testing.T) {
 }
 
 func TestUnixListenerAcceptHonorsCancellation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "easytier.sock")
+	path := shortTempSock(t)
 	listener, err := ListenUnix(path, 0)
 	if err != nil {
 		t.Fatal(err)

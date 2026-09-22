@@ -209,3 +209,10 @@ func (t *Tunn) SessionCount() int {
 	defer t.mu.Unlock()
 	return len(t.sessions)
 }
+
+// SessionFor returns the session associated with receivingIndex, if any.
+func (t *Tunn) SessionFor(receivingIndex uint32) *Session {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessions[receivingIndex]
+}

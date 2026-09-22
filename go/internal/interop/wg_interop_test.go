@@ -24,13 +24,6 @@ import (
 // (WgConfig::new_from_network_identity = digest(name, secret)), so both
 // sides compute the same keypair without exchanging anything.
 func TestInteropWGOracle(t *testing.T) {
-	// DIAGNOSED 2026-09-19: the oracle binds the wg listener (run_listener
-	// logs addr conversion and "new listener added") but never logs
-	// "Received bytes from peer" - zero UDP datagrams reach
-	// handle_udp_incoming, so our initiation gets no response. The Go-side
-	// initiator stack is verified end-to-end by TestInitiatorResponderInterop.
-	// Skip pending oracle-side investigation; see REWRITE_PROGRESS_TODO.md.
-	t.Skip("oracle wg listener accepts no UDP traffic in --no-tun mode; diagnosed 2026-09-19, see REWRITE_PROGRESS_TODO.md")
 	coreBin := os.Getenv("RUST_ORACLE_CORE")
 	if coreBin == "" {
 		t.Skip("RUST_ORACLE_CORE not set; WG oracle interop needs the oracle binary")
@@ -46,9 +39,12 @@ func TestInteropWGOracle(t *testing.T) {
 	_, cleanup := spawnRustWithExtra(t, coreBin, network, secret,
 		[]string{"wg://" + wgAddr, "tcp://" + rpcAddr}, nil, nil)
 	defer cleanup()
-	if !waitForUDPAddr(wgAddr, 10*time.Second) {
-		t.Fatal("oracle wg:// listener not ready in time")
+
+	// Wait for Rust process RPC listener to be up
+	if !waitForTCPAddr(rpcAddr, 8*time.Second) {
+		t.Fatal("oracle RPC portal not ready in time")
 	}
+	time.Sleep(500 * time.Millisecond) // Allow UDP listener to bind
 
 	// Both sides derive the same WG static key from the network identity.
 	staticPriv := protocol.DeriveWGPrivateKey(network, secret)
@@ -75,25 +71,37 @@ func TestInteropWGOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := socket.WriteToUDP(init, oracle); err != nil {
-		t.Fatal(err)
-	}
 
 	buf := make([]byte, 2048)
-	socket.SetReadDeadline(time.Now().Add(10 * time.Second))
-	n, _, err := socket.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatalf("no handshake response from the oracle: %v", err)
+	var respSession *wginterop.Session
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) && respSession == nil {
+		if _, err := socket.WriteToUDP(init, oracle); err != nil {
+			t.Fatal(err)
+		}
+		_ = socket.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		n, _, err := socket.ReadFromUDP(buf)
+		if err == nil && n == wginterop.HandshakeRespSize {
+			sess, err := initiator.ConsumeHandshakeResponse(buf[:n])
+			if err == nil {
+				respSession = sess
+				break
+			}
+		}
 	}
-	session, err := initiator.ConsumeHandshakeResponse(buf[:n])
-	if err != nil {
-		t.Fatalf("oracle handshake response rejected: %v", err)
+	if respSession == nil {
+		t.Fatalf("no valid handshake response from the oracle")
 	}
 	t.Logf("oracle WG handshake completed")
 
-	// Seal one data packet; the oracle decapsulates it into its WG data
-	// plane (visible as "receive IP packet from peer" in its debug log).
-	sealed := session.SealData([]byte("interop-wg-ping"))
+	// Seal one data packet wrapped with the synthetic IPv4 header;
+	// the oracle decapsulates it into its WG data plane.
+	body := []byte("interop-wg-ping")
+	header := protocol.MarshalWGTunnelHeader(len(body))
+	inner := make([]byte, 0, len(header)+len(body))
+	inner = append(inner, header...)
+	inner = append(inner, body...)
+	sealed := respSession.SealData(inner)
 	if _, err := socket.WriteToUDP(sealed, oracle); err != nil {
 		t.Fatal(err)
 	}
@@ -102,9 +110,9 @@ func TestInteropWGOracle(t *testing.T) {
 	// any authentic datagram round-trips the session keys both ways when
 	// opened. A timeout here is not fatal: the handshake plus accepted
 	// sealed data is the interop contract for this cell.
-	socket.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = socket.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if n, _, err := socket.ReadFromUDP(buf); err == nil && n > 0 {
-		if plaintext, err := session.OpenData(buf[:n]); err == nil {
+		if plaintext, err := respSession.OpenData(buf[:n]); err == nil {
 			t.Logf("oracle data/keepalive opened: %d bytes", len(plaintext))
 		} else if _, err := initiatorKeepaliveOpen(buf[:n]); err == nil {
 			t.Logf("oracle keepalive accepted")
@@ -116,19 +124,26 @@ func TestInteropWGOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := socket.WriteToUDP(init2, oracle); err != nil {
-		t.Fatal(err)
+	var rekeySession *wginterop.Session
+	rekeyDeadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(rekeyDeadline) && rekeySession == nil {
+		if _, err := socket.WriteToUDP(init2, oracle); err != nil {
+			t.Fatal(err)
+		}
+		_ = socket.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		n, _, err := socket.ReadFromUDP(buf)
+		if err == nil && n == wginterop.HandshakeRespSize {
+			sess, err := initiator.ConsumeHandshakeResponse(buf[:n])
+			if err == nil {
+				rekeySession = sess
+				break
+			}
+		}
 	}
-	socket.SetReadDeadline(time.Now().Add(10 * time.Second))
-	n, _, err = socket.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatalf("no rekey response from the oracle: %v", err)
-	}
-	if _, err := initiator.ConsumeHandshakeResponse(buf[:n]); err != nil {
-		t.Fatalf("oracle rekey response rejected: %v", err)
+	if rekeySession == nil {
+		t.Fatalf("no rekey response from the oracle")
 	}
 	t.Logf("WG oracle interop: handshake, sealed data and rekey all verified")
-
 }
 
 // initiatorKeepaliveOpen reports whether datagram is a bare WireGuard

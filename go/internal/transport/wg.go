@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
+	"github.com/EasyTier/EasyTier/go/internal/transport/wginterop"
 )
 
 const wgSessionQueueSize = 128
@@ -46,6 +47,7 @@ type WGService struct {
 	// hsResponder answers handshake initiations for all sessions so
 	// initiation replays are rejected service-wide.
 	hsResponder *WgHandshakeResponder
+	interopTunn *wginterop.Tunn
 }
 
 // wgSessionRole selects the WireGuard timer behavior: dialed sessions
@@ -68,6 +70,9 @@ type WGSession struct {
 
 	crypto  *WgCryptoState
 	sendSeq atomic.Uint64
+
+	interopSession *wginterop.Session
+	isStandardWG   bool
 
 	role     wgSessionRole
 	timers   wgSessionTimers
@@ -322,7 +327,84 @@ func (s *WGService) surfaceSession(key string, session *WGSession) bool {
 	}
 }
 
+func isStandardWG(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	if data[1] != 0 || data[2] != 0 || data[3] != 0 {
+		return false
+	}
+	msgType := binary.LittleEndian.Uint32(data[:4])
+	switch msgType {
+	case wginterop.MsgTypeHandshakeInit:
+		return len(data) == wginterop.HandshakeInitSize
+	case wginterop.MsgTypeHandshakeResponse:
+		return len(data) == wginterop.HandshakeRespSize
+	case wginterop.MsgTypeCookieReply:
+		return len(data) == wginterop.CookieReplySize
+	case wginterop.MsgTypeData:
+		return len(data) >= wginterop.DataOverheadSize
+	default:
+		return false
+	}
+}
+
+func (s *WGService) handleStandardWG(remote *net.UDPAddr, data []byte) {
+	s.mu.Lock()
+	if s.interopTunn == nil {
+		tunn, err := wginterop.NewTunn(s.cryptoCfg.Private, s.cryptoCfg.PeerPublic, 1<<20)
+		if err != nil {
+			s.mu.Unlock()
+			return
+		}
+		s.interopTunn = tunn
+	}
+	tunn := s.interopTunn
+	s.mu.Unlock()
+
+	result := tunn.HandleDatagram(remote.IP, data)
+	if result.Kind == wginterop.KindNetwork && len(result.ToNetwork) > 0 {
+		_, _ = s.socket.WriteToUDP(result.ToNetwork, remote)
+	}
+
+	msgType := binary.LittleEndian.Uint32(data[:4])
+	if msgType == wginterop.MsgTypeHandshakeInit && result.Kind == wginterop.KindNetwork && len(result.ToNetwork) >= 8 {
+		localIndex := binary.LittleEndian.Uint32(result.ToNetwork[4:8])
+		interopSess := tunn.SessionFor(localIndex)
+		session, _ := s.sessionForRemote(remote, false)
+		if session != nil {
+			session.isStandardWG = true
+			session.interopSession = interopSess
+			session.markRecv()
+			s.surfaceSession(remote.String(), session)
+		}
+		return
+	}
+
+	if result.Kind == wginterop.KindTunnel {
+		plaintext := result.ToTunnel
+		if len(plaintext) >= protocol.WGTunnelHeaderSize+protocol.PeerManagerHeaderSize {
+			packet, err := protocol.ParseBody(plaintext[protocol.WGTunnelHeaderSize:])
+			if err == nil {
+				s.mu.Lock()
+				session := s.sessions[remote.String()]
+				s.mu.Unlock()
+				if session != nil {
+					session.markRecv()
+					_ = session.deliver(packet)
+				}
+			}
+		}
+	}
+}
+
 func (s *WGService) handleWGDatagram(remote *net.UDPAddr, data []byte) {
+	if isStandardWG(data) {
+		if s.cryptoCfg != nil {
+			s.handleStandardWG(remote, data)
+		}
+		return
+	}
 	if len(data) < protocol.WGTunnelHeaderSize+1 {
 		return
 	}
@@ -480,6 +562,113 @@ func DialWGWithCrypto(ctx context.Context, address string, cfg *WgCryptoConfig, 
 	return session, nil
 }
 
+// DialWGStandard dials a WireGuard endpoint using standard RFC WireGuard protocol
+// (boringtun Noise IK), compatible with Rust EasyTier Oracle and stock WG peers.
+func DialWGStandard(ctx context.Context, address string, cfg *WgCryptoConfig, opts ...BindOption) (*WGSession, error) {
+	if ctx == nil {
+		return nil, errors.New("WG dial context is nil")
+	}
+	if cfg == nil {
+		return nil, errors.New("WG standard dial requires crypto config")
+	}
+	remote, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return nil, fmt.Errorf("resolve WG remote address %q: %w", address, err)
+	}
+	local := &net.UDPAddr{IP: net.IPv6unspecified}
+	if remote.IP.To4() != nil {
+		local = &net.UDPAddr{IP: net.IPv4zero}
+	}
+	_, dev := resolveBindOption(address, opts)
+	network := "udp"
+	if dev != "" {
+		network = udpNetworkForAddr(local)
+	}
+	socket, err := listenUDPWithBind(network, local, dev)
+	if err != nil {
+		return nil, fmt.Errorf("bind WG client socket: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = socket.Close()
+		}
+	}()
+
+	initiator, err := wginterop.NewInitiator(cfg.Private, cfg.PeerPublic)
+	if err != nil {
+		return nil, fmt.Errorf("create WG initiator: %w", err)
+	}
+
+	initPkt, err := initiator.FormatHandshakeInitiation()
+	if err != nil {
+		return nil, fmt.Errorf("format WG initiation: %w", err)
+	}
+
+	buf := make([]byte, 2048)
+	var respSession *wginterop.Session
+	retryTicker := time.NewTicker(250 * time.Millisecond)
+	defer retryTicker.Stop()
+
+	// Initial send
+	if _, err := socket.WriteToUDP(initPkt, remote); err != nil {
+		return nil, fmt.Errorf("send WG initiation: %w", err)
+	}
+
+	readChan := make(chan []byte, 4)
+	readDone := make(chan struct{})
+	defer close(readDone)
+
+	go func() {
+		for {
+			select {
+			case <-readDone:
+				return
+			default:
+				_ = socket.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+				n, r, err := socket.ReadFromUDP(buf)
+				if err != nil {
+					if errors.Is(err, net.ErrClosed) {
+						return
+					}
+					continue
+				}
+				if r.String() == remote.String() && n == wginterop.HandshakeRespSize {
+					readChan <- append([]byte(nil), buf[:n]...)
+					return
+				}
+			}
+		}
+	}()
+
+	handshakeDeadline := time.After(6 * time.Second)
+	for respSession == nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-handshakeDeadline:
+			return nil, errors.New("WG standard handshake timed out")
+		case respBytes := <-readChan:
+			sess, err := initiator.ConsumeHandshakeResponse(respBytes)
+			if err != nil {
+				return nil, fmt.Errorf("consume WG handshake response: %w", err)
+			}
+			respSession = sess
+		case <-retryTicker.C:
+			_, _ = socket.WriteToUDP(initPkt, remote)
+		}
+	}
+
+	session := newWGSession(socket, remote, nil, cfg, wgRoleInitiator, func() { _ = socket.Close() })
+	session.isStandardWG = true
+	session.interopSession = respSession
+	session.markRecv()
+	session.handshaked.Store(true)
+	cleanup = false
+	go session.readLoop()
+	return session, nil
+}
+
 // RemoteAddr returns the session peer's UDP address.
 func (s *WGSession) RemoteAddr() net.Addr { return s.remote }
 
@@ -495,6 +684,22 @@ func (s *WGSession) Send(ctx context.Context, packet protocol.Packet) error {
 	case <-s.done:
 		return net.ErrClosed
 	default:
+	}
+	if s.isStandardWG && s.interopSession != nil {
+		body, err := packet.MarshalBody()
+		if err != nil {
+			return fmt.Errorf("marshal WG peer packet: %w", err)
+		}
+		header := protocol.MarshalWGTunnelHeader(len(body))
+		inner := make([]byte, 0, len(header)+len(body))
+		inner = append(inner, header...)
+		inner = append(inner, body...)
+		sealed := s.interopSession.SealData(inner)
+		if err := writeUDP(ctx, s.socket, sealed, s.remote); err != nil {
+			return fmt.Errorf("send WG peer packet: %w", err)
+		}
+		s.markSend()
+		return nil
 	}
 	body, err := s.sealDatagram(packet)
 	if err != nil {
@@ -639,6 +844,21 @@ func (s *WGSession) readLoop() {
 			return
 		}
 		if remote.String() != s.remote.String() {
+			continue
+		}
+		if isStandardWG(buffer[:n]) {
+			msgType := binary.LittleEndian.Uint32(buffer[:4])
+			if msgType == wginterop.MsgTypeData && s.interopSession != nil {
+				plaintext, err := s.interopSession.OpenData(buffer[:n])
+				if err == nil && len(plaintext) >= protocol.WGTunnelHeaderSize+protocol.PeerManagerHeaderSize {
+					packet, err := protocol.ParseBody(plaintext[protocol.WGTunnelHeaderSize:])
+					if err == nil {
+						s.markRecv()
+						_ = s.deliver(packet)
+						continue
+					}
+				}
+			}
 			continue
 		}
 		if n < protocol.WGTunnelHeaderSize+1 {

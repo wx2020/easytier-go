@@ -514,12 +514,17 @@ func (ep *Endpoint) Close() error {
 		close(ep.doneCh)
 		_ = ep.socket.Close()
 		ep.mu.Lock()
+		conns := make([]*Connection, 0, len(ep.conns))
 		for _, c := range ep.conns {
-			_ = c.Close()
+			conns = append(conns, c)
 		}
 		ep.conns = nil
 		ep.byPeer = nil
 		ep.mu.Unlock()
+
+		for _, c := range conns {
+			_ = c.Close()
+		}
 	}
 	return nil
 }
@@ -527,15 +532,23 @@ func (ep *Endpoint) Close() error {
 func (ep *Endpoint) addConn(c *Connection) {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
-	ep.conns[string(c.localCID)] = c
-	ep.byPeer[c.remoteAddr.String()] = c
+	if ep.conns != nil {
+		ep.conns[string(c.localCID)] = c
+	}
+	if ep.byPeer != nil {
+		ep.byPeer[c.remoteAddr.String()] = c
+	}
 }
 
 func (ep *Endpoint) removeConn(c *Connection) {
 	ep.mu.Lock()
 	defer ep.mu.Unlock()
-	delete(ep.conns, string(c.localCID))
-	delete(ep.byPeer, c.remoteAddr.String())
+	if ep.conns != nil {
+		delete(ep.conns, string(c.localCID))
+	}
+	if ep.byPeer != nil {
+		delete(ep.byPeer, c.remoteAddr.String())
+	}
 }
 
 func (ep *Endpoint) getConn(destCID []byte, remote *net.UDPAddr) *Connection {
