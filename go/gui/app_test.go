@@ -68,3 +68,4 @@ func TestAppLifecycle(t *testing.T) {
 		t.Fatalf("remove instance failed: %v", err)
 	}
 }
+

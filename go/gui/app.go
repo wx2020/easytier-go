@@ -220,3 +220,4 @@ func (a *App) GetDefaultDirs() map[string]string {
 func (a *App) GetOSType() string {
 	return runtime.GOOS
 }
+

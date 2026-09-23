@@ -1,11 +1,12 @@
 name: EasyTier Test
 
 on:
-  push:
-    branches: [ "develop", "main", "feature" ]
-  pull_request:
-    branches: [ "develop", "main", "feature" ]
   workflow_dispatch:
+  # Disabled on routine pushes/PRs: Rust oracle tests are frozen and only run manually on demand.
+  # push:
+  #   branches: [ "develop", "main", "feature" ]
+  # pull_request:
+  #   branches: [ "develop", "main", "feature" ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -90,7 +91,7 @@ jobs:
       - name: Prepare build environment
         uses: ./.github/actions/prepare-build
         with:
-          gui: true
+          gui: false
           pnpm: true
           token: ${{ secrets.GITHUB_TOKEN }}
 

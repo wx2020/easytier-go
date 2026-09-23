@@ -3,9 +3,17 @@ name: EasyTier Core
 on:
   push:
     branches: [ "develop", "main", "feature", "releases/**" ]
+    paths:
+      - "easytier/**"
+      - "easytier-web/**"
+      - ".github/workflows/core.yml"
   pull_request:
     branches: [ "develop", "main", "feature" ]
     types: [ opened, synchronize, reopened, ready_for_review ]
+    paths:
+      - "easytier/**"
+      - "easytier-web/**"
+      - ".github/workflows/core.yml"
   workflow_dispatch:
 
 concurrency:
