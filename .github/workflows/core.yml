@@ -2,10 +2,11 @@ name: EasyTier Core
 
 on:
   push:
-    branches: [ "develop", "main", "releases/**" ]
+    branches: [ "develop", "main", "feature", "releases/**" ]
   pull_request:
-    branches: [ "develop", "main" ]
+    branches: [ "develop", "main", "feature" ]
     types: [ opened, synchronize, reopened, ready_for_review ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -99,12 +100,13 @@ jobs:
             ARTIFACT_NAME: freebsd-13.2-x86_64
             BSD_VERSION: 13.2
 
-          - TARGET: x86_64-apple-darwin
-            OS: macos-latest
-            ARTIFACT_NAME: macos-x86_64
-          - TARGET: aarch64-apple-darwin
-            OS: macos-latest
-            ARTIFACT_NAME: macos-aarch64
+          # Excluded: macos targets requiring signing / macos runners
+          # - TARGET: x86_64-apple-darwin
+          #   OS: macos-latest
+          #   ARTIFACT_NAME: macos-x86_64
+          # - TARGET: aarch64-apple-darwin
+          #   OS: macos-latest
+          #   ARTIFACT_NAME: macos-aarch64
 
           - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest

@@ -95,14 +95,15 @@ jobs:
             goarch: amd64
             goarm: ""
             artifact: freebsd-amd64
-          - goos: darwin
-            goarch: amd64
-            goarm: ""
-            artifact: darwin-amd64
-          - goos: darwin
-            goarch: arm64
-            goarm: ""
-            artifact: darwin-arm64
+          # Excluded: macOS targets requiring signing / certificates
+          # - goos: darwin
+          #   goarch: amd64
+          #   goarm: ""
+          #   artifact: darwin-amd64
+          # - goos: darwin
+          #   goarch: arm64
+          #   goarm: ""
+          #   artifact: darwin-arm64
           - goos: windows
             goarch: amd64
             goarm: ""
@@ -266,6 +267,7 @@ jobs:
 
   ohos:
     name: OHOS HAR
+    if: false # Excluded pending OHOS toolchain / signature configuration
     needs: gate
     runs-on: ubuntu-latest
     steps:
@@ -374,7 +376,7 @@ jobs:
           set -euo pipefail
           VER="${{ steps.version.outputs.version }}"
           mkdir -p dist/artifacts
-          for target in linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64 windows-i686 windows-arm64; do
+          for target in linux-x86_64 linux-aarch64 windows-x86_64 windows-i686 windows-arm64; do
             plat="${target%%-*}"; bundle_dir="dist/.build/gui/$target"
             mkdir -p "$bundle_dir"
             printf "GUI-placeholder-%s-v${VER}-%s\n" "$target" "$SOURCE_DATE_EPOCH" > "$bundle_dir/README.txt"
@@ -485,7 +487,7 @@ jobs:
 
   assemble:
     name: Assemble (SBOM, checksums, signatures, provenance)
-    needs: [build, ffi, magisk, ohos, android, gui, docker]
+    needs: [build, ffi, magisk, android, gui, docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

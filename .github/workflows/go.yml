@@ -56,11 +56,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Phase scope: linux x64 only. Re-add windows/darwin/arm64 targets
-          # when the rewrite leaves the build-verification phase.
+          # Excluded: darwin (macos) & ohos requiring code signing or specialized toolchains
           - goos: linux
             goarch: amd64
             extension: ''
+          - goos: linux
+            goarch: arm64
+            extension: ''
+          - goos: windows
+            goarch: amd64
+            extension: '.exe'
     defaults:
       run:
         working-directory: go

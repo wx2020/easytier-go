@@ -2,10 +2,11 @@ name: EasyTier GUI
 
 on:
   push:
-    branches: ["develop", "main", "releases/**"]
+    branches: ["develop", "main", "feature", "releases/**"]
   pull_request:
-    branches: ["develop", "main"]
+    branches: ["develop", "main", "feature"]
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -50,14 +51,15 @@ jobs:
             GUI_TARGET: aarch64-unknown-linux-gnu
             ARTIFACT_NAME: linux-aarch64
 
-          - TARGET: x86_64-apple-darwin
-            OS: macos-latest
-            GUI_TARGET: x86_64-apple-darwin
-            ARTIFACT_NAME: macos-x86_64
-          - TARGET: aarch64-apple-darwin
-            OS: macos-latest
-            GUI_TARGET: aarch64-apple-darwin
-            ARTIFACT_NAME: macos-aarch64
+          # Excluded: macos targets requiring code signing / macos runners
+          # - TARGET: x86_64-apple-darwin
+          #   OS: macos-latest
+          #   GUI_TARGET: x86_64-apple-darwin
+          #   ARTIFACT_NAME: macos-x86_64
+          # - TARGET: aarch64-apple-darwin
+          #   OS: macos-latest
+          #   GUI_TARGET: aarch64-apple-darwin
+          #   ARTIFACT_NAME: macos-aarch64
 
           - TARGET: x86_64-pc-windows-msvc
             OS: windows-latest
