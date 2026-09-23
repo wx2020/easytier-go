@@ -76,12 +76,13 @@ jobs:
             OS: ubuntu-24.04-arm
             ARTIFACT_NAME: linux-aarch64
 
-          - TARGET: riscv64gc-unknown-linux-musl
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-riscv64
-          - TARGET: loongarch64-unknown-linux-musl
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-loongarch64
+          # Excluded: RISC-V 64, LoongArch 64, MIPS targets excluded
+          # - TARGET: riscv64gc-unknown-linux-musl
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-riscv64
+          # - TARGET: loongarch64-unknown-linux-musl
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-loongarch64
 
           # Excluded: 32-bit ARM (armv6/armv7) targets excluded; only ARM64 (Linux/Android) retained
           # - TARGET: armv7-unknown-linux-musleabihf # raspberry pi 2-3-4, not tested
@@ -97,12 +98,13 @@ jobs:
           #   OS: ubuntu-24.04
           #   ARTIFACT_NAME: linux-arm
 
-          - TARGET: mips-unknown-linux-musl
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-mips
-          - TARGET: mipsel-unknown-linux-musl
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-mipsel
+          # Excluded: MIPS targets excluded
+          # - TARGET: mips-unknown-linux-musl
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-mips
+          # - TARGET: mipsel-unknown-linux-musl
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-mipsel
 
           - TARGET: x86_64-unknown-freebsd
             OS: ubuntu-24.04
