@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWindow } from '~/composables/wails_bridge'
 import pkg from '~/../package.json'
 
 onBeforeMount(async () => {

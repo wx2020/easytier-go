@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, watch, onMounted, ref } from 'vue';
 import type { Mode, ServiceMode, RemoteMode, NormalMode } from '~/composables/mode';
-import { appConfigDir, appLogDir } from '@tauri-apps/api/path';
-import { join } from '@tauri-apps/api/path';
+import { appConfigDir, appLogDir, join } from '~/composables/wails_bridge';
 import { getServiceStatus, type ServiceStatus } from '~/composables/backend';
 
 const { t } = useI18n()

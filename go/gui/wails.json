@@ -1,0 +1,12 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "easytier-gui",
+  "outputfilename": "easytier-gui",
+  "frontend:dir": "../../easytier-gui",
+  "frontend:install": "pnpm install",
+  "frontend:build": "pnpm run build",
+  "author": {
+    "name": "EasyTier Contributors",
+    "email": "easytier@easytier.top"
+  }
+}

@@ -11,3 +11,5 @@ use ./go/platform
 use ./go/uptime
 
 use ./go/web
+
+use ./go/gui

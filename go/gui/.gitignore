@@ -1,0 +1,4 @@
+easytier-gui
+easytier-gui.exe
+*.exe
+dist/assets/

@@ -10,6 +10,8 @@ declare global {
   const MenuItemExit: typeof import('./composables/tray')['MenuItemExit']
   const MenuItemShow: typeof import('./composables/tray')['MenuItemShow']
   const acceptHMRUpdate: typeof import('pinia')['acceptHMRUpdate']
+  const appConfigDir: typeof import('./composables/wails_bridge')['appConfigDir']
+  const appLogDir: typeof import('./composables/wails_bridge')['appLogDir']
   const collectNetworkInfo: typeof import('./composables/backend')['collectNetworkInfo']
   const computed: typeof import('vue')['computed']
   const createApp: typeof import('vue')['createApp']
@@ -20,12 +22,14 @@ declare global {
   const defineStore: typeof import('pinia')['defineStore']
   const deleteNetworkInstance: typeof import('./composables/backend')['deleteNetworkInstance']
   const effectScope: typeof import('vue')['effectScope']
+  const exit: typeof import('./composables/wails_bridge')['exit']
   const generateMenuItem: typeof import('./composables/tray')['generateMenuItem']
   const generateNetworkConfig: typeof import('./composables/backend')['generateNetworkConfig']
   const getActivePinia: typeof import('pinia')['getActivePinia']
   const getConfig: typeof import('./composables/backend')['getConfig']
   const getCurrentInstance: typeof import('vue')['getCurrentInstance']
   const getCurrentScope: typeof import('vue')['getCurrentScope']
+  const getCurrentWindow: typeof import('./composables/wails_bridge')['getCurrentWindow']
   const getEasytierVersion: typeof import('./composables/backend')['getEasytierVersion']
   const getNetworkMetas: typeof import('./composables/backend')['getNetworkMetas']
   const getServiceStatus: typeof import('./composables/backend')['getServiceStatus']
@@ -35,13 +39,16 @@ declare global {
   const initService: typeof import('./composables/backend')['initService']
   const initWebClient: typeof import('./composables/backend')['initWebClient']
   const inject: typeof import('vue')['inject']
+  const invoke: typeof import('./composables/wails_bridge')['invoke']
   const isClientRunning: typeof import('./composables/backend')['isClientRunning']
   const isProxy: typeof import('vue')['isProxy']
   const isReactive: typeof import('vue')['isReactive']
   const isReadonly: typeof import('vue')['isReadonly']
   const isRef: typeof import('vue')['isRef']
   const isWebClientConnected: typeof import('./composables/backend')['isWebClientConnected']
+  const join: typeof import('./composables/wails_bridge')['join']
   const listNetworkInstanceIds: typeof import('./composables/backend')['listNetworkInstanceIds']
+  const listen: typeof import('./composables/wails_bridge')['listen']
   const listenGlobalEvents: typeof import('./composables/event')['listenGlobalEvents']
   const loadLastNetworkInstanceId: typeof import('./composables/config')['loadLastNetworkInstanceId']
   const loadMode: typeof import('./composables/mode')['loadMode']
@@ -69,6 +76,7 @@ declare global {
   const onUnmounted: typeof import('vue')['onUnmounted']
   const onUpdated: typeof import('vue')['onUpdated']
   const onWatcherCleanup: typeof import('vue')['onWatcherCleanup']
+  const open: typeof import('./composables/wails_bridge')['open']
   const parseNetworkConfig: typeof import('./composables/backend')['parseNetworkConfig']
   const prepareVpnService: typeof import('./composables/mobile_vpn')['prepareVpnService']
   const provide: typeof import('vue')['provide']
@@ -99,6 +107,7 @@ declare global {
   const toRefs: typeof import('vue')['toRefs']
   const toValue: typeof import('vue')['toValue']
   const triggerRef: typeof import('vue')['triggerRef']
+  const type: typeof import('./composables/wails_bridge')['type']
   const unref: typeof import('vue')['unref']
   const updateNetworkConfigState: typeof import('./composables/backend')['updateNetworkConfigState']
   const useAttrs: typeof import('vue')['useAttrs']
@@ -118,6 +127,7 @@ declare global {
   const watchEffect: typeof import('vue')['watchEffect']
   const watchPostEffect: typeof import('vue')['watchPostEffect']
   const watchSyncEffect: typeof import('vue')['watchSyncEffect']
+  const writeText: typeof import('./composables/wails_bridge')['writeText']
 }
 // for type re-export
 declare global {
@@ -135,6 +145,8 @@ declare module 'vue' {
     readonly MenuItemExit: UnwrapRef<typeof import('./composables/tray')['MenuItemExit']>
     readonly MenuItemShow: UnwrapRef<typeof import('./composables/tray')['MenuItemShow']>
     readonly acceptHMRUpdate: UnwrapRef<typeof import('pinia')['acceptHMRUpdate']>
+    readonly appConfigDir: UnwrapRef<typeof import('./composables/wails_bridge')['appConfigDir']>
+    readonly appLogDir: UnwrapRef<typeof import('./composables/wails_bridge')['appLogDir']>
     readonly collectNetworkInfo: UnwrapRef<typeof import('./composables/backend')['collectNetworkInfo']>
     readonly computed: UnwrapRef<typeof import('vue')['computed']>
     readonly createApp: UnwrapRef<typeof import('vue')['createApp']>
@@ -145,12 +157,14 @@ declare module 'vue' {
     readonly defineStore: UnwrapRef<typeof import('pinia')['defineStore']>
     readonly deleteNetworkInstance: UnwrapRef<typeof import('./composables/backend')['deleteNetworkInstance']>
     readonly effectScope: UnwrapRef<typeof import('vue')['effectScope']>
+    readonly exit: UnwrapRef<typeof import('./composables/wails_bridge')['exit']>
     readonly generateMenuItem: UnwrapRef<typeof import('./composables/tray')['generateMenuItem']>
     readonly generateNetworkConfig: UnwrapRef<typeof import('./composables/backend')['generateNetworkConfig']>
     readonly getActivePinia: UnwrapRef<typeof import('pinia')['getActivePinia']>
     readonly getConfig: UnwrapRef<typeof import('./composables/backend')['getConfig']>
     readonly getCurrentInstance: UnwrapRef<typeof import('vue')['getCurrentInstance']>
     readonly getCurrentScope: UnwrapRef<typeof import('vue')['getCurrentScope']>
+    readonly getCurrentWindow: UnwrapRef<typeof import('./composables/wails_bridge')['getCurrentWindow']>
     readonly getEasytierVersion: UnwrapRef<typeof import('./composables/backend')['getEasytierVersion']>
     readonly getNetworkMetas: UnwrapRef<typeof import('./composables/backend')['getNetworkMetas']>
     readonly getServiceStatus: UnwrapRef<typeof import('./composables/backend')['getServiceStatus']>
@@ -160,13 +174,16 @@ declare module 'vue' {
     readonly initService: UnwrapRef<typeof import('./composables/backend')['initService']>
     readonly initWebClient: UnwrapRef<typeof import('./composables/backend')['initWebClient']>
     readonly inject: UnwrapRef<typeof import('vue')['inject']>
+    readonly invoke: UnwrapRef<typeof import('./composables/wails_bridge')['invoke']>
     readonly isClientRunning: UnwrapRef<typeof import('./composables/backend')['isClientRunning']>
     readonly isProxy: UnwrapRef<typeof import('vue')['isProxy']>
     readonly isReactive: UnwrapRef<typeof import('vue')['isReactive']>
     readonly isReadonly: UnwrapRef<typeof import('vue')['isReadonly']>
     readonly isRef: UnwrapRef<typeof import('vue')['isRef']>
     readonly isWebClientConnected: UnwrapRef<typeof import('./composables/backend')['isWebClientConnected']>
+    readonly join: UnwrapRef<typeof import('./composables/wails_bridge')['join']>
     readonly listNetworkInstanceIds: UnwrapRef<typeof import('./composables/backend')['listNetworkInstanceIds']>
+    readonly listen: UnwrapRef<typeof import('./composables/wails_bridge')['listen']>
     readonly listenGlobalEvents: UnwrapRef<typeof import('./composables/event')['listenGlobalEvents']>
     readonly loadLastNetworkInstanceId: UnwrapRef<typeof import('./composables/config')['loadLastNetworkInstanceId']>
     readonly loadMode: UnwrapRef<typeof import('./composables/mode')['loadMode']>
@@ -194,6 +211,7 @@ declare module 'vue' {
     readonly onUnmounted: UnwrapRef<typeof import('vue')['onUnmounted']>
     readonly onUpdated: UnwrapRef<typeof import('vue')['onUpdated']>
     readonly onWatcherCleanup: UnwrapRef<typeof import('vue')['onWatcherCleanup']>
+    readonly open: UnwrapRef<typeof import('./composables/wails_bridge')['open']>
     readonly parseNetworkConfig: UnwrapRef<typeof import('./composables/backend')['parseNetworkConfig']>
     readonly prepareVpnService: UnwrapRef<typeof import('./composables/mobile_vpn')['prepareVpnService']>
     readonly provide: UnwrapRef<typeof import('vue')['provide']>
@@ -224,6 +242,7 @@ declare module 'vue' {
     readonly toRefs: UnwrapRef<typeof import('vue')['toRefs']>
     readonly toValue: UnwrapRef<typeof import('vue')['toValue']>
     readonly triggerRef: UnwrapRef<typeof import('vue')['triggerRef']>
+    readonly type: UnwrapRef<typeof import('./composables/wails_bridge')['type']>
     readonly unref: UnwrapRef<typeof import('vue')['unref']>
     readonly updateNetworkConfigState: UnwrapRef<typeof import('./composables/backend')['updateNetworkConfigState']>
     readonly useAttrs: UnwrapRef<typeof import('vue')['useAttrs']>
@@ -243,5 +262,6 @@ declare module 'vue' {
     readonly watchEffect: UnwrapRef<typeof import('vue')['watchEffect']>
     readonly watchPostEffect: UnwrapRef<typeof import('vue')['watchPostEffect']>
     readonly watchSyncEffect: UnwrapRef<typeof import('vue')['watchSyncEffect']>
+    readonly writeText: UnwrapRef<typeof import('./composables/wails_bridge')['writeText']>
   }
 }

@@ -1,4 +1,4 @@
-import { type } from '@tauri-apps/plugin-os';
+import { type } from '~/composables/wails_bridge';
 
 export interface WebClientConfig {
     config_server_url?: string

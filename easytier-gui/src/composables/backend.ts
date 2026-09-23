@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from '~/composables/wails_bridge'
 import { Api, NetworkTypes } from 'easytier-frontend-lib'
 import { GetNetworkMetasResponse } from 'node_modules/easytier-frontend-lib/dist/modules/api'
 

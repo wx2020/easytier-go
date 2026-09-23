@@ -58,7 +58,7 @@ jobs:
             easytier-web/frontend/dist/*
   build:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - TARGET: x86_64-unknown-linux-musl
@@ -84,9 +84,10 @@ jobs:
           - TARGET: arm-unknown-linux-musleabihf # raspberry pi 0-1, not tested
             OS: ubuntu-24.04
             ARTIFACT_NAME: linux-armhf
-          - TARGET: arm-unknown-linux-musleabi # raspberry pi 0-1, not tested
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-arm
+          # Excluded: arm-unknown-linux-musleabi fails with jemalloc zig unsupported -mcpu flag
+          # - TARGET: arm-unknown-linux-musleabi # raspberry pi 0-1, not tested
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-arm
 
           - TARGET: mips-unknown-linux-musl
             OS: ubuntu-24.04

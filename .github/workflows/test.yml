@@ -48,7 +48,7 @@ jobs:
       - name: Prepare build environment
         uses: ./.github/actions/prepare-build
         with:
-          gui: true
+          gui: false
           pnpm: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
