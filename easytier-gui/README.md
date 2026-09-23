@@ -1,54 +1,42 @@
-# GUI for EasyTier
+# EasyTier GUI
 
-this is a GUI implementation for EasyTier, based on Tauri2.
+Modern, lightweight desktop GUI client for EasyTier, powered by **Vue 3** frontend and **Wails v2 (Go)** backend.
 
-## Compile
+## Architecture
 
-### Install prerequisites
+- **Frontend**: Vue 3 + TypeScript + Vite + PrimeVue in `easytier-gui/`.
+- **Backend / Host**: Pure Go Wails v2 desktop application in `go/gui/`.
+  - Directly interfaces with `go/internal/gui/backend.go`.
+  - Zero Rust / C++ toolchain dependencies.
+  - Generates an ~8 MB self-contained binary in 3 seconds.
 
-```
-apt install npm
-npm install -g pnpm
-```
+## Build From Source
 
-### For Desktop (Win/Mac/Linux)
+### Prerequisites
 
-```
-cd ../tauri-plugin-vpnservice
+- **Node.js**: >= 20.x with `pnpm`
+- **Go**: >= 1.24
+
+### 1. Build Frontend Assets
+
+```bash
+cd easytier-gui
 pnpm install
 pnpm build
-
-cd ../easytier-web/frontend-lib
-pnpm install
-pnpm build
-
-cd ../../easytier-gui
-pnpm install
-pnpm tauri build
 ```
 
-### For Android
+This generates production assets in `easytier-gui/dist`.
 
-Need to install android SDK / emulator / NDK / Java (easy with android studio)
+### 2. Build Desktop Executable
 
-```
-# For ArchLinux
-sudo pacman -Sy sdkmanager
-sudo sdkmanager --install platform-tools platforms\;android-34 ndk\;r26 build-tools
-export PATH=/opt/android-sdk/platform-tools:$PATH
-export ANDROID_HOME=/opt/android-sdk/
-export NDK_HOME=/opt/android-sdk/ndk/26.0.10792818/
-rustup target add aarch64-linux-android
+```bash
+cd ../go/gui
 
-install java 20
+# Run unit tests
+go test -v .
+
+# Compile standalone executable (Windows: .exe, Linux: binary)
+go build -ldflags "-s -w" -o easytier-gui.exe .
 ```
 
-Java version depend on gradle version specified in (easytier-gui\src-tauri\gen\android\build.gradle.kts)
-
-See [Gradle compatibility matrix](https://docs.gradle.org/current/userguide/compatibility.html) for detail .
-
-```
-pnpm install
-pnpm tauri android init
-pnpm tauri android build
-```
+The resulting `easytier-gui` binary contains all embedded frontend assets (`//go:embed all:dist`) and runs out-of-the-box.

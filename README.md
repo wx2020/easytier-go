@@ -1,326 +1,203 @@
-# EasyTier
+# EasyTier-Go
 
-[![Github release](https://img.shields.io/github/v/tag/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/releases)
-[![GitHub](https://img.shields.io/github/license/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/blob/main/LICENSE)
-[![GitHub last commit](https://img.shields.io/github/last-commit/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/commits/main)
-[![GitHub issues](https://img.shields.io/github/issues/EasyTier/EasyTier)](https://github.com/EasyTier/EasyTier/issues)
-[![GitHub Core Actions](https://github.com/EasyTier/EasyTier/actions/workflows/core.yml/badge.svg)](https://github.com/EasyTier/EasyTier/actions/workflows/core.yml)
-[![GitHub GUI Actions](https://github.com/EasyTier/EasyTier/actions/workflows/gui.yml/badge.svg)](https://github.com/EasyTier/EasyTier/actions/workflows/gui.yml)
-[![GitHub Test Actions](https://github.com/EasyTier/EasyTier/actions/workflows/test.yml/badge.svg)](https://github.com/EasyTier/EasyTier/actions/workflows/test.yml)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/EasyTier/EasyTier)
+[![Go CI](https://github.com/wx2020/easytier-go/actions/workflows/go.yml/badge.svg?branch=feature)](https://github.com/wx2020/easytier-go/actions/workflows/go.yml)
+[![EasyTier GUI](https://github.com/wx2020/easytier-go/actions/workflows/gui.yml/badge.svg?branch=feature)](https://github.com/wx2020/easytier-go/actions/workflows/gui.yml)
+[![Rust-Go Interop (2.6.4)](https://github.com/wx2020/easytier-go/actions/workflows/interop.yml/badge.svg?branch=feature)](https://github.com/wx2020/easytier-go/actions/workflows/interop.yml)
+[![EasyTier Core](https://github.com/wx2020/easytier-go/actions/workflows/core.yml/badge.svg?branch=feature)](https://github.com/wx2020/easytier-go/actions/workflows/core.yml)
+[![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL--3.0-blue.svg)](https://github.com/wx2020/easytier-go/blob/feature/LICENSE)
 
 [简体中文](/README_CN.md) | [English](/README.md)
 
-> ✨ A simple, secure, decentralized virtual private network solution powered by Rust and Tokio
+> ✨ A high-performance, simple, and secure decentralized virtual private network (Mesh VPN) powered by a clean-room Go rewrite, 100% protocol-compatible with the official EasyTier 2.6.4 specification.
 
 <p align="center">
-<img src="assets/config-page.png" width="300" alt="config page">
+<img src="assets/config-page.png" width="300" alt="configuration page">
 <img src="assets/running-page.png" width="300" alt="running page">
 </p>
 
-📚 **[Full Documentation](https://easytier.cn/en/)** | 🖥️ **[Web Console](https://easytier.cn/web)** | 📝 **[Download Releases](https://github.com/EasyTier/EasyTier/releases)** | 🧩 **[Third Party Tools](https://easytier.cn/en/guide/installation_gui.html#third-party-graphical-interfaces)** | ❤️ **[Sponsor](#sponsor)**
+📚 **[Documentation](https://easytier.cn/en/)** | 🖥️ **[Web Console](https://easytier.cn/web)** | 📝 **[Releases](https://github.com/wx2020/easytier-go/releases)** | 🧩 **[System Engineering Spec](docs/GO_REWRITE_SE.md)** | 🛡️ **[Clean-Room Policy](docs/CLEAN_ROOM.md)**
 
-## Features
+---
 
-### Core Features
+## Highlights & Go Architecture Advantages
 
-- 🔒 **Decentralized**: Nodes are equal and independent, no centralized services required  
-- 🚀 **Easy to Use**: Multiple operation methods via web, client, and command line  
-- 🌍 **Cross-Platform**: Supports Win/MacOS/Linux/FreeBSD/Android and X86/ARM/MIPS architectures  
-- 🔐 **Secure**: AES-GCM or WireGuard encryption, prevents man-in-the-middle attacks  
+This repository contains the **clean-room pure Go reimplementation** of EasyTier. The upstream Rust 2.6.4 codebase serves as the compatibility oracle and specification baseline.
 
-### Advanced Capabilities
+Key advantages of the Go rewrite:
 
-- 🔌 **Efficient NAT Traversal**: Supports UDP and IPv6 traversal, works with NAT4-NAT4 networks  
-- 🌐 **Subnet Proxy**: Nodes can share subnets for other nodes to access  
-- 🔄 **Intelligent Routing**: Latency priority and automatic route selection for best network experience  
-- ⚡ **High Performance**: Zero-copy throughout the entire link, supports TCP/UDP/WSS/WG protocols  
+- 🚀 **Pure Go Native Implementation**: Core binaries are built with `CGO_ENABLED=0` (pure Go), producing single, self-contained static executables with zero external dynamic library dependencies and no glibc version coupling.
+- 🖥️ **Ultra-lightweight Wails Desktop Client**: Completely decoupled from Tauri and Rust (removed over 4,300 lines of Rust glue code). Replaced with a pure Go **Wails v2** desktop host that reuses 100% of the modern Vue 3 interface. Binary size is reduced from 40 MB down to **~8 MB** with sub-3-second builds.
+- 🤝 **100% Bidirectional Protocol Compatibility**: Verified continuously against the official Rust 2.6.4 oracle through an automated matrix of over 60 test cells (`interop.yml`) covering TCP, UDP, WebSocket, WireGuard, Noise_xx handshakes, relaying, and compression.
+- 🌍 **Focused on Mainstream Production Platforms**: Pruned obsolete or high-maintenance legacy architectures (32-bit ARMv6/v7, MIPS, RISC-V, LoongArch) to ensure production-grade performance and reliability on **x86_64** and **aarch64 (ARM64)**.
+- ⚡ **Context-Bound Lifecycle Safety**: Every socket, TUN file descriptor, routing table entry, and temporary resource is bound to a `context.Context` supervisor with guaranteed teardown and rollback paths.
 
-### Network Optimization
+---
 
-- 📊 **UDP Loss Resistance**: KCP/QUIC proxy optimizes latency and bandwidth in high packet loss environments  
-- 🔧 **Web Management**: Easy configuration and monitoring through web interface  
-- 🛠️ **Zero Config**: Simple deployment with statically linked executables  
+## Supported Platform Matrix
+
+| OS | Supported Architectures | Artifact Type | Target Environment |
+| :--- | :--- | :--- | :--- |
+| **Linux** | `amd64 (x86_64)`, `arm64 (aarch64)` | Static binaries, Systemd service, Docker | Cloud servers, NAS, Raspberry Pi 4/5, edge gateways |
+| **Windows** | `amd64 (x86_64)`, `386 (i686)` | Daemon (`.exe`), Wails lightweight GUI app | Windows 10/11 Desktop and Windows Server |
+| **Android** | `arm64-v8a` | Magisk module, Android mobile core | Modern 64-bit Android smartphones and tablets |
+| **FreeBSD** | `amd64 (x86_64)` | Static binaries | FreeBSD routers and gateways |
+
+> *Note: Legacy 32-bit ARM (ARMv6/v7), MIPS, RISC-V 64, and LoongArch 64 architectures have been pruned from continuous release pipelines. For legacy embedded routers, please use historical releases or custom cross-compilation.*
+
+---
+
+## Core Features
+
+### Fundamentals
+- 🔒 **Decentralized Mesh Architecture**: Peer-to-peer equal nodes with automatic discovery, NAT traversal, and zero single points of failure.
+- 🚀 **Easy to Use**: Unified control via CLI commands, lightweight GUI desktop client, or web management interface.
+- 🔐 **Cryptographic Security**: End-to-end encryption using the Noise Protocol framework (`Noise_XX` pattern) with ChaCha20-Poly1305 / AES-GCM ciphers.
+
+### Advanced Networking
+- 🔌 **Full-Cone NAT Traversal**: High-performance UDP and IPv6 hole-punching capable of traversing complex NAT4-NAT4 environments.
+- 🌐 **Subnet Proxy (Site-to-Site LAN)**: Declare local IP ranges (e.g. `10.1.1.0/24`) to connect entire office/home LAN networks without installing clients on every device.
+- 🔄 **Intelligent Dynamic Routing**: Latency-optimized and loss-aware routing algorithm that switches seamlessly between direct P2P and multi-hop relays.
+- ⚡ **Multi-Protocol Transports**: Encapsulation support over TCP, UDP, WebSocket (WS/WSS), and WireGuard (WG).
+
+---
 
 ## Quick Start
 
-### 📥 Installation
+### Option 1: Download Pre-Built Releases (Recommended)
 
-Choose the installation method that best suits your needs:
+Download the binary for your operating system and CPU architecture from the [Releases Page](https://github.com/wx2020/easytier-go/releases).
 
-Linux (Recommended):
-```bash
-curl -fsSL "https://github.com/EasyTier/EasyTier/blob/main/script/install.sh?raw=true" | sudo bash -s install
-```
+### Option 2: Build From Source (Pure Go, Fast)
 
-Homebrew (MacOS/Linux):
-```bash
-brew tap brewforge/chinese
-brew install --cask easytier-gui
-```
-
-Windows (Recommended, run with administrator privileges):
-```powershell
-irm "https://github.com/EasyTier/EasyTier/blob/main/script/install.ps1?raw=true" | iex
-```
-
-Install via cargo (Latest development version): 
-```bash
-cargo install --git https://github.com/EasyTier/EasyTier.git easytier
-```
-
-[Install pre-built binary](https://github.com/EasyTier/EasyTier/releases) (Recommended, All platforms supported)
-
-[Install via Docker](https://easytier.cn/en/guide/installation.html#installation-methods)
-
-[Install OpenWrt ipk package](https://github.com/EasyTier/luci-app-easytier)
-
-Additional steps:
-
-[One-Click Register Service](https://easytier.cn/en/guide/network/oneclick-install-as-service.html) (Automatically start when the system boots and run in the background)
-
-### 🚀 Basic Usage
-
-#### Quick Networking with Shared Nodes
-
-EasyTier supports quick networking using shared public nodes. When you don't have a public IP, you can use the free shared nodes provided by the EasyTier community. Nodes will automatically attempt NAT traversal and establish P2P connections. When P2P fails, data will be relayed through shared nodes.
-
-When using shared nodes, each node entering the network needs to provide the same `--network-name` and `--network-secret` parameters as the unique identifier of the network.
-
-Taking two nodes as an example (Please use more complex network name to avoid conflicts):
-
-1. Run on Node A:
+No Rust, C++ toolchain, or Zig compiler is required. Simply install Go (>= 1.24):
 
 ```bash
-# Run with administrator privileges
-sudo easytier-core -d --network-name abc --network-secret abc -p tcp://<SharedNodeIP>:11010
+# 1. Clone repository
+git clone -b feature https://github.com/wx2020/easytier-go.git
+cd easytier-go
+
+# 2. Build core daemon and CLI (takes only a few seconds)
+cd go
+go build ./cmd/easytier-core ./cmd/easytier-cli
+
+# 3. Run unit tests with race detection
+go test -race ./...
+
+# 4. Build Wails Desktop GUI (requires Node.js and pnpm for frontend build)
+cd ../easytier-gui
+pnpm install
+pnpm build
+cd ../go/gui
+go build -ldflags "-s -w" -o easytier-gui.exe .
 ```
 
-2. Run on Node B:
+---
 
+## Usage Guide
+
+### 1. Fast Networking via Public Shared Nodes
+
+When neither node has a public IP, connect through community shared nodes using matching `--network-name` and `--network-secret`:
+
+#### Node A:
 ```bash
-# Run with administrator privileges
-sudo easytier-core -d --network-name abc --network-secret abc -p tcp://<SharedNodeIP>:11010
+# Run with administrator / root privileges
+sudo easytier-core -d --network-name mynet --network-secret mysecret -p tcp://<SharedNodeIP>:11010
 ```
 
-After successful execution, you can check the network status using `easytier-cli`:
+#### Node B:
+```bash
+sudo easytier-core -d --network-name mynet --network-secret mysecret -p tcp://<SharedNodeIP>:11010
+```
+
+#### Verify Network Status:
+```bash
+easytier-cli peer
+```
 
 ```text
 | ipv4         | hostname       | cost  | lat_ms | loss_rate | rx_bytes | tx_bytes | tunnel_proto | nat_type | id         | version         |
 | ------------ | -------------- | ----- | ------ | --------- | -------- | -------- | ------------ | -------- | ---------- | --------------- |
-| 10.126.126.1 | abc-1          | Local | *      | *         | *        | *        | udp          | FullCone | 439804259  | 2.6.2-70e69a38~ |
-| 10.126.126.2 | abc-2          | p2p   | 3.452  | 0         | 17.33 kB | 20.42 kB | udp          | FullCone | 390879727  | 2.6.2-70e69a38~ |
-|              | PublicServer_a | p2p   | 27.796 | 0.000     | 50.01 kB | 67.46 kB | tcp          | Unknown  | 3771642457 | 2.6.2-70e69a38~ |
+| 10.126.126.1 | node-a         | Local | *      | *         | *        | *        | udp          | FullCone | 439804259  | 2.6.4           |
+| 10.126.126.2 | node-b         | p2p   | 3.452  | 0         | 17.33 kB | 20.42 kB | udp          | FullCone | 390879727  | 2.6.4           |
+|              | PublicServer   | relay | 27.796 | 0.000     | 50.01 kB | 67.46 kB | tcp          | Unknown  | 3771642457 | 2.6.4           |
 ```
 
-You can test connectivity between nodes:
-
+Test connectivity:
 ```bash
-# Test connectivity
-ping 10.126.126.1
 ping 10.126.126.2
 ```
 
-Note: If you cannot ping through, it may be that the firewall is blocking incoming traffic. Please turn off the firewall or add allow rules.
+---
 
-To improve availability, you can connect to multiple shared nodes simultaneously:
+### 2. Decentralized Peer-to-Peer Networking
 
+If at least one node has a reachable public address or port forwarding:
+
+#### Start Node A (Public Node):
 ```bash
-# Connect to multiple shared nodes
-sudo easytier-core -d --network-name abc --network-secret abc -p tcp://<SharedNodeIP1>:11010 -p udp://<SharedNodeIP2>:11010
-```
-
-Once your network is set up successfully, you can easily configure it to start automatically on system boot. Refer to the [One-Click Register Service guide](https://easytier.cn/en/guide/network/oneclick-install-as-service.html) for step-by-step instructions on registering EasyTier as a system service.
-
-#### Decentralized Networking
-
-EasyTier is fundamentally decentralized, with no distinction between server and client. As long as one device can communicate with any node in the virtual network, it can join the virtual network. Here's how to set up a decentralized network:
-
-1. Start First Node (Node A):
-
-```bash
-# Start the first node
 sudo easytier-core -i 10.144.144.1
 ```
 
-After startup, this node will listen on the following ports by default:
-- TCP: 11010
-- UDP: 11010
-- WebSocket: 11011
-- WebSocket SSL: 11012
-- WireGuard: 11013
-
-2. Connect Second Node (Node B):
-
+#### Connect Node B to Node A:
 ```bash
-# Connect to the first node using its public IP
-sudo easytier-core -i 10.144.144.2 -p udp://FIRST_NODE_PUBLIC_IP:11010
+sudo easytier-core -i 10.144.144.2 -p udp://<NodeA_Public_IP>:11010
 ```
 
-3. Verify Connection:
-
+#### Join Node C:
+Connect to any reachable existing peer in the network:
 ```bash
-# Test connectivity
-ping 10.144.144.2
-
-# View connected peers
-easytier-cli peer
-
-# View routing information
-easytier-cli route
-
-# View local node information
-easytier-cli node
+sudo easytier-core -i 10.144.144.3 -p udp://<NodeA_Public_IP>:11010
 ```
 
-For more nodes to join the network, they can connect to any existing node in the network using the `-p` parameter:
+---
 
-```bash
-# Connect to any existing node using its public IP
-sudo easytier-core -i 10.144.144.3 -p udp://ANY_EXISTING_NODE_PUBLIC_IP:11010
-```
+### 3. Subnet Proxy (Site-to-Site LAN)
 
-### 🔍 Advanced Features
-
-#### Subnet Proxy
-
-Assuming the network topology is as follows, Node B wants to share its accessible subnet 10.1.1.0/24 with other nodes:
+Expose a remote LAN subnet (e.g. `10.1.1.0/24`) to all EasyTier virtual mesh peers:
 
 ```mermaid
 flowchart LR
+    subgraph Mobile Node A
+        nodea["EasyTier Node<br/>10.144.144.1"]
+    end
 
-subgraph Node A Public IP 22.1.1.1
-nodea[EasyTier<br/>10.144.144.1]
-end
+    subgraph Office Gateway Node B
+        nodeb["EasyTier Gateway<br/>10.144.144.2"]
+    end
 
-subgraph Node B
-nodeb[EasyTier<br/>10.144.144.2]
-end
+    lan[["Office Subnet<br/>10.1.1.0/24"]]
 
-id1[[10.1.1.0/24]]
-
-nodea <--> nodeb <-.-> id1
+    nodea <== Mesh Tunnel ==> nodeb -. LAN Access .-> lan
 ```
 
-To share a subnet, add the `-n` parameter when starting EasyTier:
-
+#### Declare Subnet on Node B:
 ```bash
-# Share subnet 10.1.1.0/24 with other nodes
 sudo easytier-core -i 10.144.144.2 -n 10.1.1.0/24
 ```
+Subnet routes automatically synchronize to Node A, allowing Node A to directly communicate with devices on `10.1.1.x`.
 
-Subnet proxy information will automatically sync to each node in the virtual network, and each node will automatically configure the corresponding route. You can verify the subnet proxy setup:
+---
 
-1. Check if the routing information has been synchronized (the proxy_cidrs column shows the proxied subnets):
+### 4. WireGuard Portal Integration
 
-```bash
-# View routing information
-easytier-cli route
-```
-
-![Routing Information](/assets/image-3.png)
-
-2. Test if you can access nodes in the proxied subnet:
+Expose a WireGuard listener port on an EasyTier node, allowing mobile devices (such as iPhones) without the EasyTier client to connect seamlessly using standard WireGuard apps:
 
 ```bash
-# Test connectivity to proxied subnet
-ping 10.1.1.2
-```
-
-#### WireGuard Integration
-
-EasyTier can act as a WireGuard server, allowing any device with a WireGuard client (including iOS and Android) to access the EasyTier network. Here's an example setup:
-
-```mermaid
-flowchart LR
-
-ios[[iPhone<br/>WireGuard Installed]]
-
-subgraph Node A Public IP 22.1.1.1
-nodea[EasyTier<br/>10.144.144.1]
-end
-
-subgraph Node B
-nodeb[EasyTier<br/>10.144.144.2]
-end
-
-id1[[10.1.1.0/24]]
-
-ios <-.-> nodea <--> nodeb <-.-> id1
-```
-
-1. Start EasyTier with WireGuard portal enabled:
-
-```bash
-# Listen on 0.0.0.0:11013 and use 10.14.14.0/24 subnet for WireGuard clients
+# Listen on port 11013 and assign 10.14.14.0/24 for WireGuard peers
 sudo easytier-core -i 10.144.144.1 --vpn-portal wg://0.0.0.0:11013/10.14.14.0/24
 ```
 
-2. Get WireGuard client configuration:
-
+Retrieve the client WireGuard configuration:
 ```bash
-# Get WireGuard client configuration
 easytier-cli vpn-portal
 ```
+Import the generated `.conf` or QR code into any standard WireGuard client.
 
-3. In the output configuration:
-   - Set `Interface.Address` to an available IP from the WireGuard subnet
-   - Set `Peer.Endpoint` to the public IP/domain of your EasyTier node
-   - Import the modified configuration into your WireGuard client
+---
 
-#### Self-Hosted Public Shared Node
+## Developer & Clean-Room Documentation
 
-You can run your own public shared node to help other nodes discover each other. A public shared node is just a regular EasyTier network (with same network name and secret) that other networks can connect to.
-
-To run a public shared node:
-
-```bash
-# No need to specify IPv4 address for public shared nodes
-sudo easytier-core --network-name mysharednode --network-secret mysharednode
-```
-
-## Related Projects
-
-- [ZeroTier](https://www.zerotier.com/): A global virtual network for connecting devices.
-- [TailScale](https://tailscale.com/): A VPN solution aimed at simplifying network configuration.
-
-### Contact Us
-
-- 💬 **[Telegram Group](https://t.me/easytier)**
-- 👥 **[QQ Group]**
-  - No.1 [949700262](https://qm.qq.com/q/wFoTUChqZW)
-  - No.2 [837676408](https://qm.qq.com/q/4V33DrfgHe)
-  - No.3 [957189589](https://qm.qq.com/q/YNyTQjwlai)
-
-## License
-
-EasyTier is released under the [LGPL-3.0](https://github.com/EasyTier/EasyTier/blob/main/LICENSE).
-
-## Sponsor
-
-CDN acceleration and security protection for this project are sponsored by Tencent EdgeOne.
-
-<p align="center">
-  <a href="https://edgeone.ai/?from=github" target="_blank">
-    <img src="assets/edgeone.png" width="200" alt="EdgeOne Logo">
-  </a>
-</p>
-
-Special thanks to [Langlang Cloud](https://langlangy.cn/?i26c5a5)  and [RainCloud](https://www.rainyun.com/NjM0NzQ1_) for sponsoring our public servers.
-
-<p align="center">
-<a href="https://langlangy.cn/?i26c5a5" target="_blank">
-<img src="assets/langlang.png" width="200">
-</a>
-<a href="https://langlangy.cn/?i26c5a5" target="_blank">
-<img src="assets/raincloud.png" width="200">
-</a>
-</p>
-
-
-If you find EasyTier helpful, please consider sponsoring us. Software development and maintenance require a lot of time and effort, and your sponsorship will help us better maintain and improve EasyTier.
-
-<p align="center">
-<img src="assets/wechat.png" width="200">
-<img src="assets/alipay.png" width="200">
-</p>
+- **Clean-Room Policy**: Detailed specifications and non-infringement constraints are documented in [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
+- **System Engineering Spec**: Complete protocol specs and migration tracking in [docs/GO_REWRITE_SE.md](docs/GO_REWRITE_SE.md) and [docs/GO_REWRITE_TODOLIST.md](docs/GO_REWRITE_TODOLIST.md).
+- **License**: Released under the [LGPL-3.0-only](LICENSE) license. All Go source files are tagged with SPDX headers.
