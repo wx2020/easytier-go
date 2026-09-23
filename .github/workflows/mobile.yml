@@ -38,13 +38,14 @@ jobs:
           paths: '["Cargo.toml", "Cargo.lock", "easytier/**", "easytier-gui/**", "tauri-plugin-vpnservice/**", ".github/workflows/mobile.yml", ".github/actions/**"]'
   build-mobile:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - TARGET: aarch64-linux-android
             ARCH: aarch64
-          - TARGET: armv7-linux-androideabi
-            ARCH: armv7
+          # Excluded: 32-bit ARM (armv7) excluded; only ARM64 (Linux/Android) retained
+          # - TARGET: armv7-linux-androideabi
+          #   ARCH: armv7
           - TARGET: i686-linux-android
             ARCH: i686
           - TARGET: x86_64-linux-android

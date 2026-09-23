@@ -83,16 +83,16 @@ jobs:
             OS: ubuntu-24.04
             ARTIFACT_NAME: linux-loongarch64
 
-          - TARGET: armv7-unknown-linux-musleabihf # raspberry pi 2-3-4, not tested
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-armv7hf
-          - TARGET: armv7-unknown-linux-musleabi # raspberry pi 2-3-4, not tested
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-armv7
-          - TARGET: arm-unknown-linux-musleabihf # raspberry pi 0-1, not tested
-            OS: ubuntu-24.04
-            ARTIFACT_NAME: linux-armhf
-          # Excluded: arm-unknown-linux-musleabi fails with jemalloc zig unsupported -mcpu flag
+          # Excluded: 32-bit ARM (armv6/armv7) targets excluded; only ARM64 (Linux/Android) retained
+          # - TARGET: armv7-unknown-linux-musleabihf # raspberry pi 2-3-4, not tested
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-armv7hf
+          # - TARGET: armv7-unknown-linux-musleabi # raspberry pi 2-3-4, not tested
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-armv7
+          # - TARGET: arm-unknown-linux-musleabihf # raspberry pi 0-1, not tested
+          #   OS: ubuntu-24.04
+          #   ARTIFACT_NAME: linux-armhf
           # - TARGET: arm-unknown-linux-musleabi # raspberry pi 0-1, not tested
           #   OS: ubuntu-24.04
           #   ARTIFACT_NAME: linux-arm
@@ -123,9 +123,10 @@ jobs:
           - TARGET: i686-pc-windows-msvc
             OS: windows-latest
             ARTIFACT_NAME: windows-i686
-          - TARGET: aarch64-pc-windows-msvc
-            OS: windows-11-arm
-            ARTIFACT_NAME: windows-arm64
+          # Excluded: Windows ARM64 (ARM targets retained only for Linux/Android)
+          # - TARGET: aarch64-pc-windows-msvc
+          #   OS: windows-11-arm
+          #   ARTIFACT_NAME: windows-arm64
 
     runs-on: ${{ matrix.OS }}
     env:
