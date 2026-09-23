@@ -281,7 +281,6 @@ func (c *Connection) handlePacket(hdr *Header, rawPayload []byte) {
 		return
 	}
 
-	var hasStreamData bool
 	for _, f := range frames {
 		switch frame := f.(type) {
 		case AckFrame:
@@ -291,7 +290,6 @@ func (c *Connection) handlePacket(hdr *Header, rawPayload []byte) {
 		case StreamFrame:
 			if frame.StreamID == 0 {
 				c.recvStream.Push(frame.Offset, frame.Data, frame.Fin)
-				hasStreamData = true
 			}
 		case ConnectionCloseFrame:
 			_ = c.Close()
@@ -301,9 +299,7 @@ func (c *Connection) handlePacket(hdr *Header, rawPayload []byte) {
 		}
 	}
 
-	if hasStreamData || c.ackScheduled {
-		c.flushOutbound()
-	}
+	c.flushOutbound()
 }
 
 func (c *Connection) handleAck(ack AckFrame) {
