@@ -26,4 +26,3 @@ func killProcessGroup(cmd *exec.Cmd) {
 	case <-time.After(3 * time.Second):
 	}
 }
-

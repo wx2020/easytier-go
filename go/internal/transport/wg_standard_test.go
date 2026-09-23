@@ -77,4 +77,3 @@ func TestWGStandardGoToGo(t *testing.T) {
 		t.Fatalf("server error: %v", err)
 	}
 }
-

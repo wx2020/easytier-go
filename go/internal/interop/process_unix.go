@@ -29,4 +29,3 @@ func killProcessGroup(cmd *exec.Cmd) {
 		<-done
 	}
 }
-
