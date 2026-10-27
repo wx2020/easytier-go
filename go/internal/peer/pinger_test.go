@@ -38,7 +38,6 @@ func TestPingIntervalControllerResetsOnLoss(t *testing.T) {
 	controller := &pingIntervalController{
 		throughput:        throughput,
 		lossCount:         lossCount,
-		maxBackoffIdx:     maxBackoffIdx,
 		logicTime:         10,
 		lastSendLogicTime: 0,
 	}
@@ -48,15 +47,43 @@ func TestPingIntervalControllerResetsOnLoss(t *testing.T) {
 	if !controller.shouldSendPing() {
 		t.Fatalf("expected ping when loss count is non-zero")
 	}
-	if controller.backoffIdx != 1 {
-		t.Fatalf("backoffIdx = %d, want 1 after a send", controller.backoffIdx)
+	if controller.lastSendLogicTime != 10 {
+		t.Fatalf("lastSendLogicTime = %d, want 10", controller.lastSendLogicTime)
 	}
 
-	// Immediately after sending, backoff has grown so no ping is sent.
+	// The reference peer connection pings unconditionally every second, so the
+	// next tick sends again even without loss.
 	lossCount.Store(0)
 	controller.logicTime = 11
-	if controller.shouldSendPing() {
-		t.Fatalf("expected no ping when within backoff window")
+	if !controller.shouldSendPing() {
+		t.Fatalf("expected a ping on the next tick: the reference does not back off")
+	}
+}
+
+// TestLatencyWindowMatchesReferenceSize pins the window the peer latency is
+// averaged over: the reference uses 15 samples (WindowLatency::new(15)), so a
+// wide window would keep stale samples of a bad period in the number.
+func TestLatencyWindowMatchesReferenceSize(t *testing.T) {
+	if latencyWindowCapacity != 15 {
+		t.Fatalf("latencyWindowCapacity = %d, want 15 (reference WindowLatency::new(15))", latencyWindowCapacity)
+	}
+	window := NewWindowLatency(latencyWindowCapacity)
+	for value := 1; value <= latencyWindowCapacity; value++ {
+		window.Record(uint32(value))
+	}
+	expected := float64(0)
+	for value := 1; value <= latencyWindowCapacity; value++ {
+		expected += float64(value)
+	}
+	expected /= float64(latencyWindowCapacity)
+	if got := window.Average(); got != expected {
+		t.Fatalf("average = %v, want %v", got, expected)
+	}
+	// A fresh sample replaces the oldest one instead of averaging 16 samples.
+	window.Record(1)
+	expected = expected - 1 + 1
+	if got := window.Average(); got != expected {
+		t.Fatalf("average after a new sample = %v, want %v", got, expected)
 	}
 }
 
@@ -65,17 +92,17 @@ func TestPingIntervalControllerSendsWhenTXWithoutRX(t *testing.T) {
 	controller := &pingIntervalController{
 		throughput:        throughput,
 		lossCount:         &atomic.Uint32{},
-		maxBackoffIdx:     maxBackoffIdx,
 		logicTime:         10,
 		lastSendLogicTime: 0,
 		lastTXPackets:     100,
 		lastRXPackets:     100,
 	}
 
-	// TX grew but RX did not: ping more frequently.
+	// TX grew but RX did not: the reference pings every tick regardless, so a
+	// ping is still sent.
 	throughput.txPackets.Store(120)
 	if !controller.shouldSendPing() {
-		t.Fatalf("expected ping when TX increases without RX increase")
+		t.Fatalf("expected a ping on the next tick")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -92,7 +93,11 @@ type NodeOptions struct {
 	DHCP               bool
 	IPv4               string
 	IPv6               string
-	TunAddresses       *tun.AssignedAddresses
+	// Hostname is the node's advertised hostname in OSPF route info.
+	Hostname string
+	// Version is the node's advertised EasyTier-compatible build version.
+	Version      string
+	TunAddresses *tun.AssignedAddresses
 
 	// EnableOSPF starts the OSPF LSA flooder (route/flood.go) and feeds its
 	// converged routes into the peer router. LSA flooding runs over the
@@ -293,6 +298,10 @@ func ListenWithOptions(options NodeOptions) (*Node, error) {
 			noTun:              options.NoTUN,
 			networkSecret:      options.NetworkSecret,
 			trustedCredentials: options.TrustedCredentials,
+			nodeHostname:       options.Hostname,
+			nodeVersion:        options.Version,
+			localIPv4:          options.IPv4,
+			localIPv6:          options.IPv6,
 			tunAddresses:       options.TunAddresses,
 			ospfEnabled:        options.EnableOSPF,
 			ospfDomain:         options.OSPFDomain,
@@ -328,6 +337,10 @@ type nodeRuntime struct {
 	peerRPC      *rpc.PeerRpcManager
 	center       *peercenter.Instance
 	centerDomain string
+	nodeHostname string
+	nodeVersion  string
+	localIPv4    string
+	localIPv6    string
 
 	// p2pConfig and p2p carry the NAT traversal stack. p2pDomain scopes its
 	// peer RPC services; p2p is published by the serve goroutine.
@@ -506,7 +519,10 @@ func (n *Node) serveManaged(ctx context.Context) error {
 		n.wg.Add(1)
 		go func() {
 			defer n.wg.Done()
-			_ = runner.Run(serveCtx)
+			if err := runner.Run(serveCtx); err != nil && serveCtx.Err() == nil {
+				r.addStat("tun_runner_errors", 1)
+				fmt.Fprintf(os.Stderr, "easytier-core: TUN runner stopped: %v\n", err)
+			}
 		}()
 	}
 	if r.udp != nil {
@@ -754,6 +770,11 @@ func (r *nodeRuntime) packetLoop(ctx context.Context) {
 		if err != nil {
 			return
 		}
+		if os.Getenv("ET_DEBUG_PACKETS") != "" {
+			fmt.Fprintf(os.Stderr, "easytier packet type=%d from=%d to=%d flags=%d len=%d\n",
+				packet.Header.PacketType, packet.Header.FromPeerID, packet.Header.ToPeerID,
+				packet.Header.Flags, len(packet.Payload))
+		}
 		if r.stats != nil {
 			r.stats.Add("runtime_packets_received", 1)
 			r.stats.Add("runtime_bytes_received", uint64(len(packet.Payload)))
@@ -908,13 +929,31 @@ func (p *runtimePeerInfoProvider) ListDirectPeers() map[uint32]peercenter.Direct
 }
 
 func (p *runtimePeerInfoProvider) ListRoutes() []peercenter.PeerRoute {
-	if p.runtime.routeEngine == nil {
-		return nil
+	result := make([]peercenter.PeerRoute, 0, 8)
+	p.runtime.stateMu.RLock()
+	ospf := p.runtime.ospf
+	routeEngine := p.runtime.routeEngine
+	p.runtime.stateMu.RUnlock()
+	// The OSPF table is the authoritative reachability view (flooded routes
+	// also land in the packet router via refreshRoutes). Without it a node
+	// with no static engine (console-managed instances) sees an empty peer
+	// list, always selects itself as the peer center, and never reports its
+	// direct peers to the real center.
+	if ospf != nil {
+		for _, item := range ospf.Routes() {
+			result = append(result, peercenter.PeerRoute{PeerID: item.Destination})
+		}
 	}
-	routes := p.runtime.routeEngine.Snapshot()
-	result := make([]peercenter.PeerRoute, 0, len(routes))
-	for _, item := range routes {
-		result = append(result, peercenter.PeerRoute{PeerID: item.Destination})
+	if routeEngine != nil {
+		seen := make(map[uint32]bool, len(result))
+		for _, r := range result {
+			seen[r.PeerID] = true
+		}
+		for _, item := range routeEngine.Snapshot() {
+			if !seen[item.Destination] {
+				result = append(result, peercenter.PeerRoute{PeerID: item.Destination})
+			}
+		}
 	}
 	return result
 }
@@ -1002,6 +1041,12 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 		return fmt.Errorf("create ospf flooder: %w", err)
 	}
 	flooder.SetSessionID(sessionID)
+	flooder.SetLocalInfo(route.LocalPeerInfo{
+		Hostname:        r.nodeHostname,
+		IPv4:            r.localIPv4,
+		IPv6:            r.localIPv6,
+		EasytierVersion: r.nodeVersion,
+	})
 	// Publish the admin-signed trust list and classify connecting peers
 	// against it (reference credential enforcement).
 	if len(r.trustedCredentials) != 0 {
@@ -1028,17 +1073,28 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 	return nil
 }
 
-// directLinkCosts reports current direct peers with the smoothed RTT
-// (PeerLatencyMS, floor 1) as the OSPF link cost.
+// directLinkCosts lists the peers this node has a direct session with, priced
+// at one hop each. The reference conn graph is unweighted
+// (advertisementsFromSyncRequest rebuilds every edge at cost 1), so
+// advertising milliseconds here made any two-hop relay path (cost 2) beat a
+// direct link (cost ≥ 41) and the mesh routed everything through relays even
+// with healthy direct sessions.
+//
+// Only sessions with a proven round trip are advertised: a hole-punch session
+// the connector considers established can still be half-open (only our side
+// holds a socket), and advertising it as a direct edge pulls routed traffic
+// into a dead link. The session-scoped pinger is the liveness proof — its
+// pong can only arrive through that very session — so a running pinger with
+// no samples means no usable edge. When pingers are disabled, liveness is
+// unknown and the session is advertised (legacy behaviour).
 func (r *nodeRuntime) directLinkCosts() map[uint32]uint32 {
 	sessions := r.manager.Peers()
 	links := make(map[uint32]uint32, len(sessions))
 	for peerID := range sessions {
-		cost := uint32(r.manager.PeerLatencyMS(peerID))
-		if cost == 0 {
-			cost = 1
+		if r.manager.HasPinger(peerID) && r.manager.PeerLatencySamples(peerID) == 0 {
+			continue
 		}
-		links[peerID] = cost
+		links[peerID] = 1
 	}
 	return links
 }
@@ -1317,6 +1373,9 @@ func (r *nodeRuntime) handleRPC(ctx context.Context, packet protocol.Packet, req
 }
 
 func (r *nodeRuntime) tunIngress(ctx context.Context, packet []byte) error {
+	if os.Getenv("ET_DEBUG_PACKETS") != "" {
+		fmt.Fprintf(os.Stderr, "easytier tun-tx len=%d\n", len(packet))
+	}
 	if r.acl != nil {
 		metadata, err := gateway.ParsePacket(packet, acl.DirectionOutbound)
 		if err != nil || r.acl.Evaluate(metadata).Action != acl.ActionAllow {
@@ -1330,18 +1389,44 @@ func (r *nodeRuntime) tunIngress(ctx context.Context, packet []byte) error {
 		}
 	}
 	destination := r.tunDestination
+	fixedDestination := destination != 0
 	if destination == 0 {
 		destination = r.resolvePeerForPacket(packet)
 		if destination == 0 {
 			// No route for packet's destination IP; drop silently to avoid
 			// forwarding loops, matching Rust's subnet-proxy loop prevention.
+			if os.Getenv("ET_DEBUG_PACKETS") != "" {
+				fmt.Fprintf(os.Stderr, "easytier tun-drop no-route len=%d\n", len(packet))
+			}
 			return nil
 		}
 	}
-	return r.manager.Send(ctx, destination, protocol.Packet{
-		Header:  protocol.PeerManagerHeader{PacketType: protocol.PacketTypeData},
+	out := protocol.Packet{
+		Header:  protocol.PeerManagerHeader{ToPeerID: destination, PacketType: protocol.PacketTypeData},
 		Payload: append([]byte(nil), packet...),
-	})
+	}
+	var err error
+	if fixedDestination {
+		// Test/embedder path: TUNDestination names the one peer to use.
+		err = r.manager.Send(ctx, destination, out)
+	} else {
+		// Normal path: route through the next hop so multi-hop peers work.
+		err = r.manager.SendPacket(ctx, out)
+	}
+	if err != nil {
+		// A missing direct session is normal for multi-hop peers: SendPacket
+		// routes through the next hop, and a failure here must not stop the
+		// TUN runner.
+		r.addStat("tun_send_errors", 1)
+		if os.Getenv("ET_DEBUG_PACKETS") != "" {
+			fmt.Fprintf(os.Stderr, "easytier tun-send dst=%d len=%d err=%v\n", destination, len(packet), err)
+		}
+		return nil
+	}
+	if os.Getenv("ET_DEBUG_PACKETS") != "" {
+		fmt.Fprintf(os.Stderr, "easytier tun-send dst=%d len=%d ok\n", destination, len(packet))
+	}
+	return nil
 }
 
 func (r *nodeRuntime) resolvePeerForPacket(packet []byte) uint32 {
@@ -1367,6 +1452,22 @@ func (r *nodeRuntime) resolvePeerForPacket(packet []byte) uint32 {
 		})
 	default:
 		return 0
+	}
+	// Prefer the OSPF self-descriptions: they carry the overlay prefix for
+	// each peer (reference ipv4_peer_id_map semantics).
+	r.stateMu.RLock()
+	ospf := r.ospf
+	r.stateMu.RUnlock()
+	if ospf != nil {
+		if peerID := ospf.PeerForIP(destAddr); peerID != 0 {
+			if os.Getenv("ET_DEBUG_PACKETS") != "" {
+				fmt.Fprintf(os.Stderr, "easytier route dest=%s ospf-peer=%d\n", destAddr, peerID)
+			}
+			return peerID
+		}
+	}
+	if os.Getenv("ET_DEBUG_PACKETS") != "" {
+		fmt.Fprintf(os.Stderr, "easytier route dest=%s no-ospf-match ospf=%v peers=%d\n", destAddr, ospf != nil, len(r.manager.Peers()))
 	}
 	// Try route engine first: if destination IP matches a pseudo-IP for a peer,
 	// pick that peer. For DHCP pool 10.144.144.0/24 we map last octet to peerID.

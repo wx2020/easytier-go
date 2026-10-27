@@ -5,9 +5,12 @@ package peer
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"sync/atomic"
 
 	"github.com/EasyTier/EasyTier/go/internal/acl"
 	"github.com/EasyTier/EasyTier/go/internal/gateway"
@@ -79,6 +82,18 @@ type PeerSession struct {
 
 	closeOnce sync.Once
 	sendMu    sync.Mutex
+
+	// Traffic counters of this connection, reported to the console as the
+	// per-peer upload/download figures.
+	rxBytes   atomic.Uint64
+	txBytes   atomic.Uint64
+	rxPackets atomic.Uint64
+	txPackets atomic.Uint64
+}
+
+// TrafficStats returns the byte and packet counters of this connection.
+func (s *PeerSession) TrafficStats() (rxBytes, txBytes, rxPackets, txPackets uint64) {
+	return s.rxBytes.Load(), s.txBytes.Load(), s.rxPackets.Load(), s.txPackets.Load()
 }
 
 // Send sends a packet on this session, encrypting it when the session used the
@@ -95,12 +110,21 @@ func (s *PeerSession) Send(ctx context.Context, packet protocol.Packet) error {
 		}
 	}
 	if s.Secure != nil {
-		payload, err := s.Secure.Seal(packet.Payload)
-		if err != nil {
-			return err
+		// Control packets (ping/pong) travel through the peer connection's own
+		// sink and are never encrypted, exactly like the reference: only data
+		// and RPC packets pass the session cipher. Encrypting them made the
+		// remote peer drop our pings, so the pinger saw five consecutive
+		// losses, stopped, and the peer table kept a frozen latency.
+		control := packet.Header.PacketType == protocol.PacketTypePing ||
+			packet.Header.PacketType == protocol.PacketTypePong
+		if !control {
+			payload, err := s.Secure.Seal(packet.Payload)
+			if err != nil {
+				return err
+			}
+			packet.Payload = payload
+			packet.Header.Flags |= protocol.FlagEncrypted
 		}
-		packet.Payload = payload
-		packet.Header.Flags |= protocol.FlagEncrypted
 	} else if s.Legacy != nil {
 		// Reference control packets (ping/pong) travel through the peer
 		// connection's own sink and are never encrypted; only data and RPC
@@ -113,6 +137,8 @@ func (s *PeerSession) Send(ctx context.Context, packet protocol.Packet) error {
 			}
 		}
 	}
+	s.txPackets.Add(1)
+	s.txBytes.Add(uint64(len(packet.Payload)))
 	return s.Channel.Send(ctx, packet)
 }
 
@@ -155,6 +181,8 @@ type PeerConnectionManager struct {
 	wg            sync.WaitGroup
 	pingerEnabled bool
 	pingers       map[uint32]*PeerConnPinger
+	// pingSeq hands out globally unique ping sequence numbers.
+	pingSeq atomic.Uint32
 
 	// rpcHandler consumes locally-destined RPC packets inside the manager
 	// pipeline (peer-RPC dispatch). When nil, RPC packets are delivered to
@@ -442,11 +470,16 @@ func (m *PeerConnectionManager) registerSession(session *PeerSession) error {
 			MyPeerID: m.localPeerID,
 			PeerID:   session.PeerID,
 			Manager:  m,
+			NextSeq:  &m.pingSeq,
 		})
 		if err == nil {
 			m.mu.Lock()
+			oldPinger := m.pingers[session.PeerID]
 			m.pingers[session.PeerID] = pinger
 			m.mu.Unlock()
+			if oldPinger != nil {
+				oldPinger.Stop()
+			}
 			pinger.Start()
 		}
 	}
@@ -462,23 +495,32 @@ func (m *PeerConnectionManager) receiveSession(session *PeerSession) {
 		if err != nil {
 			return
 		}
+		session.rxPackets.Add(1)
+		session.rxBytes.Add(uint64(len(packet.Payload)))
 		// Throughput hook for the adaptive ping controller: every received
 		// packet counts as RX activity towards its source peer.
 		if pinger := m.pingerFor(packet.Header.FromPeerID); pinger != nil {
 			pinger.Throughput().IncRX()
 		}
 		if session.Secure != nil {
-			if packet.Header.Flags&protocol.FlagEncrypted == 0 {
-				return
-			}
-			plaintext, err := session.Secure.Open(packet.Payload)
-			if err != nil {
-				return
-			}
-			packet.Payload = plaintext
-			packet.Header.Flags &^= protocol.FlagEncrypted
-			if !packet.Header.IsCompressed() {
-				packet.Header.Length = uint32(len(plaintext))
+			// Control packets (ping/pong) are never encrypted, mirroring the
+			// reference's should_skip_encrypt on the send side, so they must not
+			// be decrypted here either.
+			control := packet.Header.PacketType == protocol.PacketTypePing ||
+				packet.Header.PacketType == protocol.PacketTypePong
+			if !control {
+				if packet.Header.Flags&protocol.FlagEncrypted == 0 {
+					return
+				}
+				plaintext, err := session.Secure.Open(packet.Payload)
+				if err != nil {
+					return
+				}
+				packet.Payload = plaintext
+				packet.Header.Flags &^= protocol.FlagEncrypted
+				if !packet.Header.IsCompressed() {
+					packet.Header.Length = uint32(len(plaintext))
+				}
 			}
 		} else if session.Legacy != nil {
 			if err := session.Legacy.Decrypt(&packet); err != nil {
@@ -491,6 +533,26 @@ func (m *PeerConnectionManager) receiveSession(session *PeerSession) {
 		}
 		if err := protocol.DecompressPacket(&packet); err != nil {
 			return
+		}
+		// The reference echoes a Ping as a Pong without swapping the header
+		// (peer_conn.rs just flips packet_type), so the reply still carries
+		// ToPeerID=remote. Running that through the route table would forward
+		// it back to the sender and the pinger would never see a sample,
+		// leaving every peer at the fake 1ms default. Consume remote-addressed
+		// pongs here; locally addressed ones keep flowing to embedders below.
+		if debugPing {
+			if packet.Header.PacketType == protocol.PacketTypePing || packet.Header.PacketType == protocol.PacketTypePong {
+				seq := uint32(0)
+				if len(packet.Payload) >= 4 {
+					seq = binary.LittleEndian.Uint32(packet.Payload[:4])
+				}
+				log.Printf("ping: recv type=%d from=%d to=%d seq=%d session_peer=%d",
+					packet.Header.PacketType, packet.Header.FromPeerID, packet.Header.ToPeerID, seq, session.PeerID)
+			}
+		}
+		if packet.Header.PacketType == protocol.PacketTypePong && packet.Header.ToPeerID != m.localPeerID {
+			m.deliverPong(packet, session.PeerID)
+			continue
 		}
 		if !m.allowDataPacket(packet) {
 			continue
@@ -515,9 +577,7 @@ func (m *PeerConnectionManager) receiveSession(session *PeerSession) {
 			if packet.Header.PacketType == protocol.PacketTypePong {
 				// Feed the adaptive pinger, then deliver like any other
 				// control packet so embedders can observe pong traffic.
-				if pinger := m.pingerFor(packet.Header.FromPeerID); pinger != nil {
-					pinger.HandlePong(packet)
-				}
+				m.deliverPong(packet, session.PeerID)
 			}
 			if packet.Header.PacketType == protocol.PacketTypePing {
 				pong := protocol.Packet{Header: protocol.PeerManagerHeader{
@@ -624,11 +684,18 @@ func (m *PeerConnectionManager) deliver(packet protocol.Packet) error {
 func (m *PeerConnectionManager) removeSession(session *PeerSession) {
 	_ = session.Close()
 	m.mu.Lock()
-	if m.peers[session.PeerID] == session {
+	// A replaced session must not tear down the pinger that now belongs to
+	// its successor: doing so left the peer with no pinger and every pong
+	// was dropped.
+	ownsSession := m.peers[session.PeerID] == session
+	if ownsSession {
 		delete(m.peers, session.PeerID)
 	}
-	pinger := m.pingers[session.PeerID]
-	delete(m.pingers, session.PeerID)
+	var pinger *PeerConnPinger
+	if ownsSession {
+		pinger = m.pingers[session.PeerID]
+		delete(m.pingers, session.PeerID)
+	}
 	m.mu.Unlock()
 	if pinger != nil {
 		pinger.Stop()
@@ -735,6 +802,49 @@ func (m *PeerConnectionManager) PeerCount() int {
 	return len(m.peers)
 }
 
+// deliverPong hands a pong to the pinger that is waiting for it.
+//
+// The answer may come from a relaying node instead of the peer we pinged (the
+// reference echoes a ping without swapping the header, so the addressee stays
+// the original peer). Matching by the ping sequence number therefore finds the
+// right pinger, while the peer id of the sender does not.
+//
+// fromSession is the peer id of the session the pong arrived on. A pinger
+// measures one direct session, so only pongs from that very session count as
+// a round trip: a relayed answer proves the path is alive but says nothing
+// about the session, and accepting it kept dead hole-punch sessions alive
+// forever (every ping "succeeded" through the relay, so the five-loss
+// disconnect never fired and routed traffic into a dead link).
+func (m *PeerConnectionManager) deliverPong(packet protocol.Packet, fromSession uint32) {
+	if len(packet.Payload) < 4 {
+		return
+	}
+	seq := binary.LittleEndian.Uint32(packet.Payload[:4])
+	m.mu.RLock()
+	pingers := make([]*PeerConnPinger, 0, len(m.pingers))
+	for _, pinger := range m.pingers {
+		pingers = append(pingers, pinger)
+	}
+	m.mu.RUnlock()
+	for _, pinger := range pingers {
+		if pinger.AwaitingSeq(seq) {
+			if fromSession == pinger.PeerID() {
+				pinger.HandlePong(packet)
+			} else if debugPing {
+				log.Printf("ping: relayed pong seq=%d from=%d via session %d ignored (pinger peer %d)",
+					seq, packet.Header.FromPeerID, fromSession, pinger.PeerID())
+			}
+			return
+		}
+	}
+	// No pinger is waiting for that sequence: fall back to the sender.
+	if pinger := m.pingerFor(packet.Header.FromPeerID); pinger != nil {
+		if fromSession == pinger.PeerID() {
+			pinger.HandlePong(packet)
+		}
+	}
+}
+
 // pingerFor returns the active pinger for peerID, or nil when pingers are
 // disabled or the peer has not established a session.
 func (m *PeerConnectionManager) pingerFor(peerID uint32) *PeerConnPinger {
@@ -749,13 +859,67 @@ func (m *PeerConnectionManager) pingerFor(peerID uint32) *PeerConnPinger {
 func (m *PeerConnectionManager) PeerLatencyMS(peerID uint32) int32 {
 	pinger := m.pingerFor(peerID)
 	if pinger == nil {
-		return 1
+		// 0 means "not measured": the peer is multi-hop (OSPF only) or the
+		// pinger has no sample yet. Callers render it as unknown instead of
+		// inventing a 1ms RTT.
+		return 0
 	}
 	ms := pinger.Latency().Milliseconds()
 	if ms <= 0 {
-		return 1
+		return 0
 	}
 	return int32(ms)
+}
+
+// PeerLossRate returns the recent ping loss ratio of a peer in percent, or -1
+// when the peer has no pinger.
+func (m *PeerConnectionManager) PeerLossRate(peerID uint32) int32 {
+	pinger := m.pingerFor(peerID)
+	if pinger == nil {
+		return -1
+	}
+	return int32(pinger.LossRate() * 100)
+}
+
+// PeerLatencySamples returns how many ping samples the peer's latency window
+// holds. A window that stops growing means the pinger is not running.
+// PeerLatencySamples returns the number of round-trip samples collected for
+// peerID (0 when pingers are disabled or no pong arrived yet).
+func (m *PeerConnectionManager) PeerLatencySamples(peerID uint32) int {
+	pinger := m.pingerFor(peerID)
+	if pinger == nil {
+		return 0
+	}
+	return pinger.Samples()
+}
+
+// HasPinger reports whether a session pinger is running for peerID. Callers
+// use it to tell "pinger disabled, liveness unknown" apart from "pinger
+// running, no samples yet".
+func (m *PeerConnectionManager) HasPinger(peerID uint32) bool {
+	return m.pingerFor(peerID) != nil
+}
+
+// ClosePeer drops the session of one peer. The reference disconnects a peer
+// connection after five consecutive ping losses; dropping the session lets the
+// connector re-establish it and the pinger start over with fresh samples.
+func (m *PeerConnectionManager) ClosePeer(peerID uint32) error {
+	if m == nil {
+		return errors.New("nil peer connection manager")
+	}
+	m.mu.Lock()
+	session := m.peers[peerID]
+	delete(m.peers, peerID)
+	pinger := m.pingers[peerID]
+	delete(m.pingers, peerID)
+	m.mu.Unlock()
+	if pinger != nil {
+		pinger.Stop()
+	}
+	if session == nil {
+		return nil
+	}
+	return session.Close()
 }
 
 // Close cancels the manager and closes all pending and established channels.

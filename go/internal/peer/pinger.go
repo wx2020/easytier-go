@@ -7,7 +7,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"math/rand"
+	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,12 +18,16 @@ import (
 )
 
 const (
-	defaultPingInterval       = 1 * time.Second
-	pingResponseTimeout       = 2 * time.Second
-	maxConcurrentPingTasks    = 5
-	maxBackoffIdx             = 5
-	maxConsecutiveLosses      = 5
-	lossWindowCapacity        = 100
+	defaultPingInterval    = 1 * time.Second
+	pingResponseTimeout    = 2 * time.Second
+	maxConcurrentPingTasks = 5
+	maxConsecutiveLosses   = 5
+	lossWindowCapacity     = 100
+	// latencyWindowCapacity matches the reference peer connection, which
+	// averages the last 15 ping round trips (WindowLatency::new(15)). A wider
+	// window keeps stale samples from a bad period in the number, which is
+	// what made the peer table disagree with a fresh ping.
+	latencyWindowCapacity     = 15
 	pingResultChannelCapacity = 100
 	pongChannelCapacity       = 64
 )
@@ -76,23 +81,28 @@ func (w *WindowLatency) Average() float64 {
 	return float64(sum) / float64(len(w.samples))
 }
 
+// debugPing enables verbose ping tracing (off by default; set ET_DEBUG_PING=1).
+var debugPing = os.Getenv("ET_DEBUG_PING") != ""
+
 // PingResult is the outcome of one ping round trip.
 type PingResult struct {
 	Latency time.Duration
 	Err     error
 }
 
-// pingIntervalController adapts the ping frequency based on throughput and
-// loss, mirroring Rust PeerConnPinger's backoff logic.
+// pingIntervalController paces the pings of a peer connection.
+//
+// The reference peer connection pings every second unconditionally (a fixed
+// one-second interval), so the controller only has to make sure at most one
+// ping is started per tick. The earlier exponential backoff thinned the pings
+// out on an idle link, which left stale samples in the latency window and made
+// the reported peer latency disagree with a fresh ping.
 type pingIntervalController struct {
 	throughput *ThroughputSnapshot
 	lossCount  *atomic.Uint32
 
 	logicTime         uint64
 	lastSendLogicTime uint64
-
-	backoffIdx    int32
-	maxBackoffIdx int32
 
 	lastTXPackets uint64
 	lastRXPackets uint64
@@ -102,10 +112,9 @@ type pingIntervalController struct {
 
 func newPingIntervalController(throughput *ThroughputSnapshot, lossCount *atomic.Uint32) *pingIntervalController {
 	return &pingIntervalController{
-		throughput:    throughput,
-		lossCount:     lossCount,
-		ticker:        time.NewTicker(defaultPingInterval),
-		maxBackoffIdx: maxBackoffIdx,
+		throughput: throughput,
+		lossCount:  lossCount,
+		ticker:     time.NewTicker(defaultPingInterval),
 	}
 }
 
@@ -137,25 +146,11 @@ func (c *pingIntervalController) rxIncrease() bool {
 }
 
 func (c *pingIntervalController) shouldSendPing() bool {
-	if c.lossCount.Load() > 0 {
-		c.backoffIdx = 0
-	} else if c.txIncrease() && !c.rxIncrease() {
-		c.backoffIdx = 0
-	}
-
 	c.lastTXPackets = c.throughput.TXPackets()
 	c.lastRXPackets = c.throughput.RXPackets()
 
-	if c.logicTime-c.lastSendLogicTime < uint64(1<<c.backoffIdx) {
+	if c.logicTime-c.lastSendLogicTime < 1 {
 		return false
-	}
-
-	if c.backoffIdx < c.maxBackoffIdx {
-		c.backoffIdx++
-	}
-
-	if c.backoffIdx > c.maxBackoffIdx-2 && rand.Float64() < 0.2 {
-		c.backoffIdx--
 	}
 
 	c.lastSendLogicTime = c.logicTime
@@ -173,7 +168,18 @@ type PeerConnPinger struct {
 	throughput     *ThroughputSnapshot
 	controlMetrics *stats.Counters
 
-	pongCh chan protocol.Packet
+	// pendingPongs archives the pongs by their sequence number. A single
+	// shared channel let concurrent pings consume each other's answer, which
+	// showed up as a constant 50% loss and a wrong latency.
+	pendingPongs map[uint32]protocol.Packet
+	pongMu       sync.Mutex
+	// nextSeq hands out globally unique sequence numbers, so a pong can be
+	// matched to its ping even when a relaying node answers on behalf of the
+	// peer we pinged.
+	nextSeq *atomic.Uint32
+	// outstanding records the sequence numbers of the pings still waiting for
+	// an answer, so the manager can route a pong to the right pinger.
+	outstanding map[uint32]struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -189,6 +195,10 @@ type PeerConnPingerConfig struct {
 	LossRateStats  *atomic.Uint32
 	Throughput     *ThroughputSnapshot
 	ControlMetrics *stats.Counters
+	// NextSeq hands out the ping sequence numbers. It is shared by all
+	// pingers of a node so that a pong can be matched to the right ping even
+	// when a relaying node answers on behalf of the peer we pinged.
+	NextSeq *atomic.Uint32
 }
 
 func NewPeerConnPinger(config PeerConnPingerConfig) (*PeerConnPinger, error) {
@@ -196,13 +206,16 @@ func NewPeerConnPinger(config PeerConnPingerConfig) (*PeerConnPinger, error) {
 		return nil, errors.New("peer connection manager is required")
 	}
 	if config.LatencyStats == nil {
-		config.LatencyStats = NewWindowLatency(lossWindowCapacity)
+		config.LatencyStats = NewWindowLatency(latencyWindowCapacity)
 	}
 	if config.LossRateStats == nil {
 		config.LossRateStats = &atomic.Uint32{}
 	}
 	if config.Throughput == nil {
 		config.Throughput = &ThroughputSnapshot{}
+	}
+	if config.NextSeq == nil {
+		config.NextSeq = &atomic.Uint32{}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerConnPinger{
@@ -213,7 +226,9 @@ func NewPeerConnPinger(config PeerConnPingerConfig) (*PeerConnPinger, error) {
 		lossRateStats:  config.LossRateStats,
 		throughput:     config.Throughput,
 		controlMetrics: config.ControlMetrics,
-		pongCh:         make(chan protocol.Packet, pongChannelCapacity),
+		pendingPongs:   make(map[uint32]protocol.Packet),
+		outstanding:    make(map[uint32]struct{}),
+		nextSeq:        config.NextSeq,
 		ctx:            ctx,
 		cancel:         cancel,
 	}, nil
@@ -244,32 +259,98 @@ func (p *PeerConnPinger) doPingPongOnce(ctx context.Context, seq uint32) (time.D
 	start := time.Now()
 	timeoutCtx, cancel := context.WithTimeout(ctx, pingResponseTimeout)
 	defer cancel()
+	if debugPing {
+		log.Printf("ping: send seq=%d to peer %d", seq, p.peerID)
+	}
 
+	// Wait for the answer to this very sequence number. The reference uses a
+	// broadcast receiver, so every in-flight ping sees its own answer; a
+	// shared channel would hand one ping's answer to another one.
 	for {
-		select {
-		case packet := <-p.pongCh:
+		if packet, ok := p.takePong(seq); ok {
 			if len(packet.Payload) < 4 {
-				continue
+				if debugPing {
+					log.Printf("ping: short pong payload %d bytes from peer %d", len(packet.Payload), packet.Header.FromPeerID)
+				}
+				return 0, errors.New("ping response is malformed")
 			}
-			respSeq := binary.LittleEndian.Uint32(packet.Payload[:4])
-			if respSeq == seq {
-				return time.Since(start), nil
+			if debugPing {
+				log.Printf("ping: pong seq=%d for peer %d", seq, packet.Header.FromPeerID)
 			}
+			return time.Since(start), nil
+		}
+		select {
 		case <-timeoutCtx.Done():
+			if debugPing {
+				log.Printf("ping: timeout waiting seq=%d from peer %d", seq, p.peerID)
+			}
 			return 0, errors.New("ping response timeout")
 		case <-p.ctx.Done():
 			return 0, p.ctx.Err()
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+// PeerID returns the peer this pinger probes. A pong only counts as this
+// session's round trip when it arrives on that peer's session.
+func (p *PeerConnPinger) PeerID() uint32 {
+	return p.peerID
+}
+
+// AwaitingSeq reports whether this pinger still waits for the answer of the
+// given sequence number, which lets the manager find the pinger a pong
+// belongs to.
+func (p *PeerConnPinger) AwaitingSeq(seq uint32) bool {
+	p.pongMu.Lock()
+	defer p.pongMu.Unlock()
+	_, ok := p.outstanding[seq]
+	return ok
+}
+
+// markOutstanding records that a ping is waiting for its answer.
+func (p *PeerConnPinger) markOutstanding(seq uint32) {
+	p.pongMu.Lock()
+	defer p.pongMu.Unlock()
+	p.outstanding[seq] = struct{}{}
+}
+
+// clearOutstanding forgets a ping that was answered or timed out.
+func (p *PeerConnPinger) clearOutstanding(seq uint32) {
+	p.pongMu.Lock()
+	defer p.pongMu.Unlock()
+	delete(p.outstanding, seq)
+}
+
+// takePong returns the archived answer for one sequence number.
+func (p *PeerConnPinger) takePong(seq uint32) (protocol.Packet, bool) {
+	p.pongMu.Lock()
+	defer p.pongMu.Unlock()
+	packet, ok := p.pendingPongs[seq]
+	if ok {
+		delete(p.pendingPongs, seq)
+	}
+	return packet, ok
 }
 
 // HandlePong feeds a received pong packet into the pinger. Callers should
 // route inbound Pong packets here after receiving them from the manager.
 func (p *PeerConnPinger) HandlePong(packet protocol.Packet) {
-	select {
-	case p.pongCh <- packet:
-	default:
+	if len(packet.Payload) < 4 {
+		return
 	}
+	seq := binary.LittleEndian.Uint32(packet.Payload[:4])
+	p.pongMu.Lock()
+	defer p.pongMu.Unlock()
+	// Keep the map bounded: a stale answer is of no use once its ping timed
+	// out.
+	if len(p.pendingPongs) >= pongChannelCapacity {
+		for key := range p.pendingPongs {
+			delete(p.pendingPongs, key)
+			break
+		}
+	}
+	p.pendingPongs[seq] = packet
 }
 
 // Start launches the ping controller and result loop.
@@ -291,7 +372,6 @@ func (p *PeerConnPinger) run() {
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		var seq uint32
 		runningTasks := 0
 		for {
 			if !controller.tick(p.ctx) {
@@ -323,11 +403,12 @@ func (p *PeerConnPinger) run() {
 				continue
 			}
 
-			currentSeq := seq
-			seq++
+			currentSeq := p.nextSeq.Add(1)
+			p.markOutstanding(currentSeq)
 			runningTasks++
 			go func() {
 				latency, err := p.doPingPongOnce(p.ctx, currentSeq)
+				p.clearOutstanding(currentSeq)
 				select {
 				case pingResults <- PingResult{Latency: latency, Err: err}:
 				case <-p.ctx.Done():
@@ -357,11 +438,15 @@ func (p *PeerConnPinger) run() {
 			p.lossRateStats.Store(uint32(lossRate * 100))
 
 			if lossCounter.Load() >= maxConsecutiveLosses {
-				// The link is dead: stop the sender loop as well. run()'s
-				// deferred controller.stop() halts the shared ticker, so
-				// without cancel the sender would park in tick() forever
-				// and Stop() would hang.
+				// The link is dead: the reference disconnects the peer
+				// connection after five consecutive ping losses, which lets the
+				// connector re-establish it and the pinger start over with
+				// fresh samples. Stopping only the pinger left a dead session
+				// behind and froze the reported latency.
 				p.cancel()
+				if p.manager != nil {
+					_ = p.manager.ClosePeer(p.peerID)
+				}
 				return
 			}
 
@@ -387,6 +472,13 @@ func (p *PeerConnPinger) recordResult(result PingResult, lossWindow *WindowLaten
 func (p *PeerConnPinger) Stop() {
 	p.cancel()
 	p.wg.Wait()
+}
+
+// Samples returns the number of latency samples the window holds.
+func (p *PeerConnPinger) Samples() int {
+	p.latencyStats.mu.Lock()
+	defer p.latencyStats.mu.Unlock()
+	return len(p.latencyStats.samples)
 }
 
 // Latency returns the smoothed round-trip latency towards the peer.
