@@ -15,7 +15,7 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/rpc"
 	"github.com/EasyTier/EasyTier/go/internal/transport"
-	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // loopbackTransport connects two peer RPC managers in memory. The peer
@@ -315,7 +315,7 @@ func TestServiceEasySymHitsPredictedPorts(t *testing.T) {
 	}
 	request.ListenerMappedAddr = mustAddrPortToProto(listenerMapped)
 
-	body, err := protojson.Marshal(request)
+	body, err := proto.Marshal(request)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}

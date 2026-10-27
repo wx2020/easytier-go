@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -213,6 +214,9 @@ func (r *nodeRuntime) initP2P(ctx context.Context) error {
 		EnableIPv6:      r.p2pConfig.EnableIPv6,
 		DefaultProtocol: r.p2pConfig.DefaultProtocol,
 		MaxFrame:        r.p2pConfig.MaxFrame,
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "easytier-core: p2p: "+format+"\n", args...)
+		},
 		Handoff: func(ctx context.Context, channel peer.PacketChannel, dstPeerID uint32) error {
 			return r.handoffDialedChannel(ctx, channel, dstPeerID)
 		},

@@ -16,20 +16,21 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	"github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 // ServiceName is the proto service name used in RPC descriptors.
 const ServiceName = "UdpHolePunchRpc"
 
-// Method indices follow the proto service declaration order.
+// Method indices follow the proto service declaration order. The reference
+// generator numbers methods from one (`index = position + 1`), so index 0 is
+// reserved for "unknown method".
 const (
-	MethodSelectPunchListener        uint32 = 0
-	MethodSendPunchPacketCone        uint32 = 1
-	MethodSendPunchPacketHardSym     uint32 = 2
-	MethodSendPunchPacketEasySym     uint32 = 3
-	MethodSendPunchPacketBothEasySym uint32 = 4
+	MethodSelectPunchListener        uint32 = 1
+	MethodSendPunchPacketCone        uint32 = 2
+	MethodSendPunchPacketHardSym     uint32 = 3
+	MethodSendPunchPacketEasySym     uint32 = 4
+	MethodSendPunchPacketBothEasySym uint32 = 5
 )
 
 // Symmetric punch pacing constants.
@@ -76,7 +77,8 @@ func NewService(pool *ListenerPool, stunSource stun.Source) *Service {
 // ServiceName implements rpc.RpcService.
 func (s *Service) ServiceName() string { return ServiceName }
 
-// HandleMethod implements rpc.RpcService with protojson bodies.
+// HandleMethod implements rpc.RpcService with protobuf bodies, which is what
+// the reference peer_rpc services exchange.
 func (s *Service) HandleMethod(methodIndex uint32, ctx context.Context, fromPeerID uint32, requestBody []byte) ([]byte, error) {
 	switch methodIndex {
 	case MethodSelectPunchListener:
@@ -118,14 +120,14 @@ func unmarshalRequest(body []byte, request proto.Message) error {
 	if len(body) == 0 {
 		return nil
 	}
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(body, request); err != nil {
+	if err := proto.Unmarshal(body, request); err != nil {
 		return fmt.Errorf("decode punch rpc request: %w", err)
 	}
 	return nil
 }
 
 func marshalResponse(response proto.Message) ([]byte, error) {
-	body, err := protojson.Marshal(response)
+	body, err := proto.Marshal(response)
 	if err != nil {
 		return nil, fmt.Errorf("encode punch rpc response: %w", err)
 	}

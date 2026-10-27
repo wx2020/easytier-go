@@ -19,16 +19,18 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
-	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // ServiceName is the proto service name for direct connection assistance.
 const ServiceName = "DirectConnectorRpc"
 
-// Method indices follow the proto service declaration order.
+// Method indices follow the proto service declaration order. The reference
+// generator numbers methods from one (`index = position + 1`), so index 0 is
+// reserved for "unknown method".
 const (
-	MethodGetIpList              uint32 = 0
-	MethodSendUdpHolePunchPacket uint32 = 1
+	MethodGetIpList              uint32 = 1
+	MethodSendUdpHolePunchPacket uint32 = 2
 )
 
 // punchAssistPackets is how many loopback control datagrams the responder
@@ -57,7 +59,8 @@ func NewIPListService(stunSource stun.Source, listeners ListenerURLs) *IPListSer
 // ServiceName implements rpc.RpcService.
 func (s *IPListService) ServiceName() string { return ServiceName }
 
-// HandleMethod implements rpc.RpcService with protojson bodies.
+// HandleMethod implements rpc.RpcService with protobuf bodies, which is what
+// the reference peer_rpc services exchange.
 func (s *IPListService) HandleMethod(methodIndex uint32, ctx context.Context, fromPeerID uint32, requestBody []byte) ([]byte, error) {
 	switch methodIndex {
 	case MethodGetIpList:
@@ -65,7 +68,7 @@ func (s *IPListService) HandleMethod(methodIndex uint32, ctx context.Context, fr
 		if err != nil {
 			return nil, err
 		}
-		body, err := protojson.Marshal(response)
+		body, err := proto.Marshal(response)
 		if err != nil {
 			return nil, fmt.Errorf("encode ip list response: %w", err)
 		}
@@ -73,14 +76,14 @@ func (s *IPListService) HandleMethod(methodIndex uint32, ctx context.Context, fr
 	case MethodSendUdpHolePunchPacket:
 		var request peer_rpc.SendUdpHolePunchPacketRequest
 		if len(requestBody) > 0 {
-			if err := (protojson.UnmarshalOptions{}).Unmarshal(requestBody, &request); err != nil {
+			if err := proto.Unmarshal(requestBody, &request); err != nil {
 				return nil, fmt.Errorf("decode send udp hole punch packet request: %w", err)
 			}
 		}
 		if err := s.sendUdpHolePunchPacket(ctx, &request); err != nil {
 			return nil, err
 		}
-		return protojson.Marshal(&common.Void{})
+		return proto.Marshal(&common.Void{})
 	default:
 		return nil, fmt.Errorf("unknown %s method %d", ServiceName, methodIndex)
 	}

@@ -20,7 +20,6 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/rpc"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
 	"github.com/EasyTier/EasyTier/go/internal/transport"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -73,14 +72,14 @@ func (c *Clients) LockSym() { c.symMu.mu.Lock() }
 // UnlockSym releases the symmetric punch serialization.
 func (c *Clients) UnlockSym() { c.symMu.mu.Unlock() }
 
-// callMethod performs one protojson peer RPC call, blacklisting the peer for
+// callMethod performs one protobuf peer RPC call, blacklisting the peer for
 // an hour when the remote does not implement the service.
 func (c *Clients) callMethod(ctx context.Context, dstPeerID uint32, method uint32, request proto.Message) ([]byte, error) {
-	body, err := protojson.Marshal(request)
+	body, err := proto.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("encode punch rpc request: %w", err)
 	}
-	response, err := c.RPC.Call(ctx, dstPeerID, c.Domain, ServiceName, method, body)
+	response, err := c.RPC.CallService(ctx, dstPeerID, c.Domain, ServiceName, method, body)
 	if err != nil {
 		if errors.Is(err, rpc.ErrNoService) {
 			c.Blacklist.Insert(dstPeerID)
@@ -168,7 +167,7 @@ func (c *Clients) ConePunch(ctx context.Context, dstPeerID uint32) (*transport.U
 		return nil, err
 	}
 	var selectReply peer_rpc.SelectPunchListenerResponse
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(selectResponse, &selectReply); err != nil {
+	if err := proto.Unmarshal(selectResponse, &selectReply); err != nil {
 		return nil, fmt.Errorf("decode select punch listener response: %w", err)
 	}
 	remoteMapped, err := protoToAddrPort(selectReply.GetListenerMappedAddr())
@@ -272,7 +271,7 @@ func (c *Clients) SymToConePunch(ctx context.Context, dstPeerID uint32, round ui
 		return nil, err
 	}
 	var selectReply peer_rpc.SelectPunchListenerResponse
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(selectResponse, &selectReply); err != nil {
+	if err := proto.Unmarshal(selectResponse, &selectReply); err != nil {
 		return nil, fmt.Errorf("decode select punch listener response: %w", err)
 	}
 	remoteMapped, err := protoToAddrPort(selectReply.GetListenerMappedAddr())
@@ -349,7 +348,7 @@ func (c *Clients) SymToConePunch(ctx context.Context, dstPeerID uint32, round ui
 			return
 		}
 		var reply peer_rpc.SendPunchPacketHardSymResponse
-		if err := (protojson.UnmarshalOptions{}).Unmarshal(response, &reply); err == nil {
+		if err := proto.Unmarshal(response, &reply); err == nil {
 			value := reply.GetNextPortIndex()
 			nextPortIndex = &value
 		}
@@ -498,7 +497,7 @@ func (c *Clients) BothEasySymPunch(ctx context.Context, dstPeerID uint32, myNatI
 		return nil, false, err
 	}
 	var reply peer_rpc.SendPunchPacketBothEasySymResponse
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(response, &reply); err != nil {
+	if err := proto.Unmarshal(response, &reply); err != nil {
 		return nil, false, fmt.Errorf("decode both easy sym response: %w", err)
 	}
 	if reply.GetIsBusy() {

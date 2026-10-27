@@ -23,7 +23,6 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/rpc"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
 	"github.com/EasyTier/EasyTier/go/internal/transport"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -82,6 +81,8 @@ type ConnectorConfig struct {
 
 	// LoopInterval overrides DefaultDialLoopInterval when positive.
 	LoopInterval time.Duration
+	// Logf reports direct-connection progress and failures; nil discards it.
+	Logf func(format string, args ...any)
 }
 
 // Connector runs the direct connect loop: discover addresses via RPC, then
@@ -208,6 +209,14 @@ func (c *Connector) loop() {
 	}
 }
 
+// logf reports through the configured logger, if any.
+func (c *Connector) logf(format string, args ...any) {
+	if c.cfg.Logf == nil {
+		return
+	}
+	c.cfg.Logf(format, args...)
+}
+
 func (c *Connector) collect() {
 	if c.cfg.Candidates == nil || c.cfg.Handoff == nil {
 		return
@@ -286,7 +295,10 @@ func (c *Connector) runDirectConnect(ctx context.Context, dstPeerID uint32) {
 			}
 		}
 		if err := c.connectOnce(ctx, dstPeerID); err == nil {
+			c.logf("direct connection to peer %d established", dstPeerID)
 			return
+		} else {
+			c.logf("direct connection to peer %d failed: %v", dstPeerID, err)
 		}
 		if c.cfg.HasDirectConn(dstPeerID) {
 			return
@@ -725,7 +737,7 @@ func (c *Connector) getIPList(ctx context.Context, dstPeerID uint32) (*peer_rpc.
 		return nil, err
 	}
 	var response peer_rpc.GetIpListResponse
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(body, &response); err != nil {
+	if err := proto.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("decode ip list response: %w", err)
 	}
 	return &response, nil
@@ -753,13 +765,13 @@ func closeChannel(channel peer.PacketChannel) error {
 // callProto marshals one request, invokes the peer RPC, and enforces a
 // timeout context.
 func callProto(ctx context.Context, mgr *rpc.PeerRpcManager, dstPeerID uint32, domain, serviceName string, method uint32, request proto.Message, timeout time.Duration) ([]byte, error) {
-	body, err := protojson.Marshal(request)
+	body, err := proto.Marshal(request)
 	if err != nil {
 		return nil, fmt.Errorf("encode rpc request: %w", err)
 	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return mgr.Call(callCtx, dstPeerID, domain, serviceName, method, body)
+	return mgr.CallService(callCtx, dstPeerID, domain, serviceName, method, body)
 }
 
 type protoMessage interface {

@@ -16,14 +16,15 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	"github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
-	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // ServiceName is the proto service name for the TCP punch exchange.
 const ServiceName = "TcpHolePunchRpc"
 
-// MethodExchangeMappedAddr is the only method of the service.
-const MethodExchangeMappedAddr uint32 = 0
+// MethodExchangeMappedAddr is the only method of the service. The reference
+// generator numbers methods from one (`index = position + 1`).
+const MethodExchangeMappedAddr uint32 = 1
 
 // Timing constants mirroring the reference TCP punch behavior.
 const (
@@ -71,7 +72,7 @@ func (s *Service) HandleMethod(methodIndex uint32, ctx context.Context, fromPeer
 	}
 	var request peer_rpc.TcpHolePunchRequest
 	if len(requestBody) > 0 {
-		if err := (protojson.UnmarshalOptions{}).Unmarshal(requestBody, &request); err != nil {
+		if err := proto.Unmarshal(requestBody, &request); err != nil {
 			return nil, fmt.Errorf("decode tcp hole punch request: %w", err)
 		}
 	}
@@ -79,7 +80,7 @@ func (s *Service) HandleMethod(methodIndex uint32, ctx context.Context, fromPeer
 	if err != nil {
 		return nil, err
 	}
-	body, err := protojson.Marshal(response)
+	body, err := proto.Marshal(response)
 	if err != nil {
 		return nil, fmt.Errorf("encode tcp hole punch response: %w", err)
 	}
@@ -136,7 +137,10 @@ type Initiator struct {
 
 // caller is the peer RPC surface the initiator needs.
 type caller interface {
-	Call(ctx context.Context, dstPeerID uint32, domain, serviceName string, methodIndex uint32, requestBody []byte) ([]byte, error)
+	// CallService carries the real proto name in the descriptor so a
+	// reference peer can find the service (its registry keys on
+	// (domain, service name, proto name)).
+	CallService(ctx context.Context, dstPeerID uint32, domain, serviceName string, methodIndex uint32, requestBody []byte) ([]byte, error)
 }
 
 // NewInitiator builds a TCP punch initiator.
@@ -201,21 +205,21 @@ func (i *Initiator) punchOnce(ctx context.Context, dstPeerID uint32) error {
 		return fmt.Errorf("get tcp port mapping: %w", err)
 	}
 
-	requestBody, err := protojson.Marshal(&peer_rpc.TcpHolePunchRequest{
+	requestBody, err := proto.Marshal(&peer_rpc.TcpHolePunchRequest{
 		ConnectorMappedAddr: mustAddrPortToProto(mapped),
 	})
 	if err != nil {
 		return err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, exchangeRPCTimeout)
-	responseBody, err := i.RPC.Call(callCtx, dstPeerID, i.Domain, ServiceName, MethodExchangeMappedAddr, requestBody)
+	responseBody, err := i.RPC.CallService(callCtx, dstPeerID, i.Domain, ServiceName, MethodExchangeMappedAddr, requestBody)
 	cancel()
 	if err != nil {
 		i.Blacklist.insert(dstPeerID)
 		return err
 	}
 	var response peer_rpc.TcpHolePunchResponse
-	if err := (protojson.UnmarshalOptions{}).Unmarshal(responseBody, &response); err != nil {
+	if err := proto.Unmarshal(responseBody, &response); err != nil {
 		return fmt.Errorf("decode tcp hole punch response: %w", err)
 	}
 	remoteMapped, err := protoToAddrPort(response.GetListenerMappedAddr())

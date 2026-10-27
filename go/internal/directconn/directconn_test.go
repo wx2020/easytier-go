@@ -17,7 +17,6 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/protocol"
 	"github.com/EasyTier/EasyTier/go/internal/stun"
 	"github.com/EasyTier/EasyTier/go/internal/transport"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -307,9 +306,9 @@ func TestNormalizeConnectorURL(t *testing.T) {
 }
 
 func protojsonUnmarshal(body []byte, message proto.Message) error {
-	return protojson.UnmarshalOptions{}.Unmarshal(body, message)
+	return proto.Unmarshal(body, message)
 }
 
 func protojsonMarshal(message proto.Message) ([]byte, error) {
-	return protojson.Marshal(message)
+	return proto.Marshal(message)
 }
