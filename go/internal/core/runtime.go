@@ -1088,13 +1088,23 @@ func (r *nodeRuntime) initFlooder(ctx context.Context) error {
 // no samples means no usable edge. When pingers are disabled, liveness is
 // unknown and the session is advertised (legacy behaviour).
 func (r *nodeRuntime) directLinkCosts() map[uint32]uint32 {
+	// TEMPORARY (2026-10-27): priced by smoothed latency, not hops. With hop
+	// costs the route table prefers the direct sessions, but the Go->Rust
+	// Noise Data frame is not interoperable yet (control plane works, TUN
+	// payloads do not arrive), so hop costs blackholed traffic to directly
+	// connected peers. Revert to `links[peerID] = 1` once the secure data
+	// frame matches the reference (see docs/GO_REWRITE_SE.md 11.8 notes).
 	sessions := r.manager.Peers()
 	links := make(map[uint32]uint32, len(sessions))
 	for peerID := range sessions {
 		if r.manager.HasPinger(peerID) && r.manager.PeerLatencySamples(peerID) == 0 {
 			continue
 		}
-		links[peerID] = 1
+		cost := uint32(r.manager.PeerLatencyMS(peerID))
+		if cost == 0 {
+			cost = 1
+		}
+		links[peerID] = cost
 	}
 	return links
 }

@@ -183,6 +183,13 @@ gofmt -l .   # must be empty; CI fails on diffs
 - **cost=1 重上线的唯一前置改为**：修 Go↔Rust noise Data 帧兼容——对照参考 `peer_conn.rs` 的 secure 数据帧（nonce/counter 起始、AAD、header 加密范围）逐字节核对 Go 的 `secure_datagram.go`，补 interop golden 或修 oracle 起参后跑通 `tcp/noise_xx go_to_rust` Data cell。
 - 经验：**「pinger 有样本」只能证明控制面同会话双向活，不能证明加密数据面兼容**——两类面要分别验证。
 
+### 2026-10-27 全部工作已 commit（8 个提交）+ F50 部署 `v2.6.4-gof50-1027`（临时延迟口径补丁）
+
+- **提交划分**：`86bdd60` rpc 响应分片 → `a6a72a2` p2p 线级修复（方法索引/proto_name/protobuf body + 直连数据面测试）→ `71b4f27` pinger 会话级 pong + 跳数代价 → `9433d5e` proxy_cidr 内核路由 + Linux TUN → `e8a6ffb` LuCI app → `b320365` 文档/工作流 → `1036743` QUIC ctx + webclient 整包加密 → `8b7dc11` CallService 测试。
+- **F50 部署版 = HEAD + 一个临时补丁**：`directLinkCosts` 暂回**延迟口径**（代码里留 TEMPORARY 注释指明 revert 条件 = noise Data 帧修复），因为 HEAD 的 cost=1 已被 A/B 证明在 Go→Rust noise Data 修好前会黑洞直连流量。活性过滤（Samples==0 不通告）保留。md5 `992e235e…`，PID 14658，实测 **8/8 peer 全通**（.1–.9、.40 含 .3/.9 冷启动后恢复），控制台 method=4 正常、零 `exceeds`。上一版备份 `/root/backup/easytier-core.bak-20261027-gorespfrag1`。
+- `.gitignore` 新增 `/.tmp/` 与 `luci-app-easytier/{bin,build}`（68M 构建产物不入库）。
+- **待办**：Go→Rust noise Data 帧兼容（`secure_datagram.go` 对照 `peer_conn.rs`）→ revert TEMPORARY 补丁启用 cost=1 → commit + 部署。
+
 ## Maintenance
 - 每次改完代码或完成新的分析后，必须调用 `memory-update` skill 检查并更新本文件。
 - 发现本文件与代码不符时，以代码为准同步修正。
