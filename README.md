@@ -8,7 +8,7 @@
 
 [简体中文](/README_CN.md) | [English](/README.md)
 
-> ✨ A high-performance, simple, and secure decentralized virtual private network (Mesh VPN) powered by a clean-room Go rewrite, 100% protocol-compatible with the official EasyTier 2.6.4 specification.
+> ✨ A high-performance, simple, and secure decentralized virtual private network (Mesh VPN) powered by a clean-room Go rewrite. The official Rust 2.6.4 implementation is the compatibility oracle; the core data plane is validated against it. This is an active work in progress — see **Project Status** below for the surfaces that are not yet complete.
 
 <p align="center">
 <img src="assets/config-page.png" width="300" alt="configuration page">
@@ -26,10 +26,29 @@ This repository contains the **clean-room pure Go reimplementation** of EasyTier
 Key advantages of the Go rewrite:
 
 - 🚀 **Pure Go Native Implementation**: Core binaries are built with `CGO_ENABLED=0` (pure Go), producing single, self-contained static executables with zero external dynamic library dependencies and no glibc version coupling.
-- 🖥️ **Ultra-lightweight Wails Desktop Client**: Completely decoupled from Tauri and Rust (removed over 4,300 lines of Rust glue code). Replaced with a pure Go **Wails v2** desktop host that reuses 100% of the modern Vue 3 interface. Binary size is reduced from 40 MB down to **~8 MB** with sub-3-second builds.
-- 🤝 **100% Bidirectional Protocol Compatibility**: Verified continuously against the official Rust 2.6.4 oracle through an automated matrix of over 60 test cells (`interop.yml`) covering TCP, UDP, WebSocket, WireGuard, Noise_xx handshakes, relaying, and compression.
+- 🖥️ **Ultra-lightweight Wails Desktop Client**: The Tauri/Rust glue layer has been removed and replaced with a pure Go **Wails v2** desktop host that reuses the Vue 3 frontend. The host and UI build, but wiring the local/service/remote instance modes is still in progress (see `docs/GO_REWRITE_TODOLIST.md` `GUI-01/02`).
+- 🤝 **Validated Core Interoperability**: The Go core is exercised against the official Rust 2.6.4 oracle by an automated 64-cell matrix (`interop.yml`) covering TCP, UDP, WebSocket, WireGuard, Noise_xx, relay, and compression. As of 2026-10-20, 60 of 64 cells are green; the four QUIC `go_to_rust` cells are being repaired and are not counted as passed.
 - 🌍 **Focused on Mainstream Production Platforms**: Pruned obsolete or high-maintenance legacy architectures (32-bit ARMv6/v7, MIPS, RISC-V, LoongArch) to ensure production-grade performance and reliability on **x86_64** and **aarch64 (ARM64)**.
 - ⚡ **Context-Bound Lifecycle Safety**: Every socket, TUN file descriptor, routing table entry, and temporary resource is bound to a `context.Context` supervisor with guaranteed teardown and rollback paths.
+
+---
+
+## Project Status (2026-10-20)
+
+The core engine (transports, handshakes, encryption, routing, gateway, management RPC) is implemented and tested. Product and delivery surfaces are not yet at parity, and placeholder artifacts are no longer published.
+
+| Surface | Status |
+| --- | --- |
+| Core / CLI / management RPC | Implemented; 60/64 interop cells green, 4 QUIC `go_to_rust` cells under repair; live interop with the official 2.6.4 node passed on 2026-10-20 (TCP/UDP, added peer) |
+| Deep interop (route dissemination, peer-center, punching vs oracle) | In progress; not in the blocking matrix |
+| Web control plane (`easytier-web`) | In progress: library exists, standalone binary and embedded console are not delivered; OIDC/proxy-rpc are stubs |
+| Uptime monitor | In progress: library exists, standalone binary/dashboard packaging not delivered |
+| GUI | In progress: Wails host and Vue UI build; instance/RPC wiring is stubbed |
+| Android / Magisk / OHOS | Deferred for 2.6.4; no placeholder artifacts are released |
+| Release pipeline | In progress: the latest Go Release run failed at assembly; no Go release assets were published |
+
+See `docs/GO_REWRITE_TODOLIST.md` for the row-by-row matrix and
+`docs/GO_REWRITE_SE.md` §11.4 for the QUIC record.
 
 ---
 
@@ -69,7 +88,7 @@ Download the binary for your operating system and CPU architecture from the [Rel
 
 ### Option 2: Build From Source (Pure Go, Fast)
 
-No Rust, C++ toolchain, or Zig compiler is required. Simply install Go (>= 1.24):
+No Rust, C++ toolchain, or Zig compiler is required. Simply install Go (>= 1.25):
 
 ```bash
 # 1. Clone repository

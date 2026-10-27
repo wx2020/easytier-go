@@ -8,7 +8,7 @@
 
 [简体中文](/README_CN.md) | [English](/README.md)
 
-> ✨ 基于 Go 语言 Clean-Room 高性能重写的去中心化异地组网方案（Mesh VPN），100% 协议级双向兼容 EasyTier 2.6.4 官方规范。
+> ✨ 基于 Go 语言 Clean-Room 高性能重写的去中心化异地组网方案（Mesh VPN）。官方 Rust 2.6.4 实现作为兼容性预言机，核心数据面已与其完成实测互通。本项目仍在持续补齐中，尚未完成的交付面见下方 **项目状态**。
 
 <p align="center">
 <img src="assets/config-page.png" width="300" alt="配置页面">
@@ -24,10 +24,28 @@
 本项目是 EasyTier 的 **Clean-Room 纯 Go 高性能重构版本**（Rust 2.6.4 原版作为基准规范与互操作预言机）。相比原版，本项目具备以下核心优势：
 
 - 🚀 **纯 Go 原生实现**：核心二进制采用 `CGO_ENABLED=0` 静态编译，零外部动态库依赖，不依赖特定 glibc 版本，开箱即用。
-- 🖥️ **极简 Wails 桌面端**：彻底剥离了原版庞大的 Tauri + Rust 胶水层（删除 4300+ 行 Rust 冗余代码），改用纯 Go 的 **Wails v2** 桌面架构。前端复用 100% Vue 3 美观界面，客户端二进制体积从 40MB 骤降至 **~8MB**，并实现秒级极速构建。
-- 🤝 **100% 双向协议兼容**：通过 CI 中跨 60 余个协议单元的自动化互通测试（`interop.yml`），无论是 TCP/UDP/WebSocket/WireGuard、Noise_xx 握手、中继转发（Relay）还是压缩传输，均与 EasyTier 2.6.4 官方节点完美互通。
+- 🖥️ **极简 Wails 桌面端**：剥离原版 Tauri + Rust 胶水层，改用纯 Go 的 **Wails v2** 桌面架构，复用 Vue 3 前端。宿主与界面可以构建，但本地/服务/远程三种实例模式的接线仍在补齐（见 `docs/GO_REWRITE_TODOLIST.md` `GUI-01/02`）。
+- 🤝 **核心互通已实测**：Go 核心通过 `interop.yml` 的 64 单元矩阵与官方 Rust 2.6.4 预言机对照，覆盖 TCP、UDP、WebSocket、WireGuard、Noise_xx、中继与压缩。截至 2026-10-20，60/64 单元通过；4 个 QUIC `go_to_rust` 单元仍在修复，**不计为通过**。
 - 🌍 **聚焦主流生产架构**：精简移除了维护代价极高、缺乏现代软硬件生态支持的 32 位老旧 ARM (ARMv6/ARMv7)、MIPS、RISC-V 与 LoongArch，将 100% 的精力投入在保障 **x86_64** 与 **aarch64 (ARM64)** 核心平台的极致性能与稳定性上。
 - ⚡ **内存与上下文安全**：全生命周期基于 Go `context.Context` 精确控制，保证每个 Socket、TUN 网卡、系统路由与映射租约在退出时均有严密的清理与回滚路径。
+
+---
+
+## 项目状态（2026-10-20）
+
+核心引擎（传输、握手、加密、路由、网关、管理 RPC）已实现并有测试；产品面与交付面尚未完全对齐，占位产物已停止发布。
+
+| 交付面 | 状态 |
+| --- | --- |
+| 核心 / CLI / 管理 RPC | 已实现；interop 60/64 通过，4 个 QUIC `go_to_rust` 单元修复中；2026-10-20 与官方 2.6.4 节点实网互通通过（TCP/UDP，新增 peer） |
+| 深层互通（路由扩散、peer-center、打洞 vs 预言机） | 进行中，尚未进入阻塞矩阵 |
+| Web 控制面（`easytier-web`） | 进行中：有库，未交付独立二进制与内嵌控制台；OIDC/proxy-rpc 仍是桩 |
+| Uptime 监控 | 进行中：有库，未交付独立二进制与 dashboard 打包 |
+| GUI | 进行中：Wails 宿主与 Vue 界面可构建，实例/RPC 接线仍是桩 |
+| Android / Magisk / OHOS | 2.6.4 暂缓，不发布占位产物 |
+| 发布流水线 | 进行中：最近一次 Go Release 在 assemble 阶段失败，未产出 Go 资产 |
+
+逐项状态见 `docs/GO_REWRITE_TODOLIST.md`，QUIC 记录见 `docs/GO_REWRITE_SE.md` §11.4。
 
 ---
 
@@ -68,7 +86,7 @@
 
 ### 方式二：从源码编译（纯 Go 极速构建）
 
-得益于纯 Go 重构，您无需配置 Rust、C++ 编译器或 Zig 交叉编译工具，只需安装标准 Go（>= 1.24）环境：
+得益于纯 Go 重构，您无需配置 Rust、C++ 编译器或 Zig 交叉编译工具，只需安装标准 Go（>= 1.25）环境：
 
 ```bash
 # 1. 克隆代码仓库

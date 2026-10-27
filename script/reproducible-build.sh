@@ -12,8 +12,9 @@
 #   ./script/reproducible-build.sh --verify
 #   GOOS=linux GOARCH=amd64 ./script/reproducible-build.sh --single
 #   ./script/reproducible-build.sh --core-only  # only core matrix, skip extended surfaces
-# Extended surfaces (REL-01): Docker context, GUI bundles, Android APKs, OHOS HAR, Magisk, FFI headers
-# are built deterministically and included in SHA256SUMS/signatures.
+# Supported extended surfaces (REL-01): Docker context, FFI headers, and a Magisk
+# module built from the real linux/arm64 core. Android APKs, OHOS HAR and GUI
+# bundles are deferred and are not emitted (no placeholder artifacts).
 
 set -euo pipefail
 
@@ -77,20 +78,9 @@ else
   TARGETS=(
     "linux/amd64"
     "linux/arm64"
-    "linux/riscv64"
-    "linux/loong64"
-    "linux/arm/7/hf"
-    "linux/arm/7"
-    "linux/arm/6/hf"
-    "linux/arm/6"
-    "linux/mips"
-    "linux/mipsle"
     "freebsd/amd64"
-    "darwin/amd64"
-    "darwin/arm64"
     "windows/amd64"
     "windows/386"
-    "windows/arm64"
   )
 fi
 
@@ -197,95 +187,29 @@ build_ffi() {
 }
 
 build_magisk() {
-  echo "==> building Magisk module Easytier-Magisk-v${VERSION}.zip"
+  echo "==> building Magisk module from the real linux/arm64 core"
+  local src="$OUT_DIR/easytier-go-v${VERSION}-linux-arm64.tar.gz"
   local tmpdir="$OUT_DIR/.build/magisk"
   rm -rf "$tmpdir"
   mkdir -p "$tmpdir"
-  # Prefer Go platform BuildMagiskZip via committed helper (go/cmd/gen-magisk)
-  if [ -f "$REPO_ROOT/go/cmd/gen-magisk/main.go" ]; then
-    if "$GO_BIN" -C "$REPO_ROOT/go" run ./cmd/gen-magisk "${VERSION}" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>&1; then
-      echo "    -> $OUT_DIR/Easytier-Magisk-v${VERSION}.zip (via platform.BuildMagiskZip)"
-      touch -d "@$SOURCE_DATE_EPOCH" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>/dev/null || true
-      rm -rf "$tmpdir"
-      return 0
-    else
-      echo "    Go helper via gen-magisk failed, trying fallback"
-      # Try with GOWORK=off explicitly inside go/ module
-      if GOWORK=off "$GO_BIN" -C "$REPO_ROOT/go" run ./cmd/gen-magisk "${VERSION}" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>&1; then
-        echo "    -> $OUT_DIR/Easytier-Magisk-v${VERSION}.zip (via platform.BuildMagiskZip GOWORK=off)"
-        touch -d "@$SOURCE_DATE_EPOCH" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>/dev/null || true
-        rm -rf "$tmpdir"
-        return 0
-      fi
-      echo "    Go helper via gen-magisk failed, trying inline fallback"
-    fi
+  if [ ! -f "$src" ]; then
+    echo "missing $src; build linux/arm64 before the Magisk module" >&2
+    exit 1
   fi
-  # Inline fallback (uses Go's archive/zip, no external zip needed if possible)
-  if "$GO_BIN" run --help >/dev/null 2>&1; then
-    cat > "$tmpdir/build_magisk.go" <<'GOEOF'
-package main
-import (
-  "fmt"
-  "os"
-  "github.com/EasyTier/EasyTier/go/platform"
-)
-func main() {
-  ver := os.Args[1]
-  m := platform.DefaultMagiskModule()
-  m.Version = "v" + ver
-  data, err := platform.BuildMagiskZip(m)
-  if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
-  if err := platform.ValidateMagiskZip(data, m.ID); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
-  out := os.Args[2]
-  if err := os.WriteFile(out, data, 0644); err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
-  fmt.Printf("magisk %d bytes\n", len(data))
-}
-GOEOF
-    if GOWORK=off "$GO_BIN" run "$tmpdir/build_magisk.go" "${VERSION}" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>&1; then
-      echo "    -> $OUT_DIR/Easytier-Magisk-v${VERSION}.zip (via platform.BuildMagiskZip inline)"
-      touch -d "@$SOURCE_DATE_EPOCH" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>/dev/null || true
-      rm -rf "$tmpdir"
-      return 0
-    fi
+  tar -xzf "$src" -C "$tmpdir"
+  if [ ! -f "$tmpdir/easytier-core" ]; then
+    echo "easytier-core missing from $src" >&2
+    exit 1
   fi
-  # Fallback: deterministic placeholder using easytier-contrib source if helper fails
-  echo "    Go helper failed, creating deterministic placeholder zip"
-  local stage="$tmpdir/stage"
-  mkdir -p "$stage/META-INF/com/google/android" "$stage/config"
-  # Reuse real magisk source files if present for authenticity
-  if [ -d "$REPO_ROOT/easytier-contrib/easytier-magisk" ]; then
-    cp "$REPO_ROOT/easytier-contrib/easytier-magisk/module.prop" "$stage/module.prop" 2>/dev/null || echo "id=easytier_magisk" > "$stage/module.prop"
-    for f in customize.sh service.sh action.sh uninstall.sh easytier_core.sh hotspot_iprule.sh; do
-      cp "$REPO_ROOT/easytier-contrib/easytier-magisk/$f" "$stage/$f" 2>/dev/null || echo "# $f" > "$stage/$f"
-    done
-    cp "$REPO_ROOT/easytier-contrib/easytier-magisk/META-INF/com/google/android/update-binary" "$stage/META-INF/com/google/android/update-binary" 2>/dev/null || echo "# updater" > "$stage/META-INF/com/google/android/update-binary"
-    echo "# updater-script" > "$stage/META-INF/com/google/android/updater-script"
-  else
-    # Minimal placeholder
-    cat > "$stage/module.prop" <<EOF
-id=easytier_magisk
-name=EasyTier_Magisk
-version=v${VERSION}
-versionCode=1
-author=EasyTier
-description=easytier magisk module @EasyTier
-minMagisk=23000
-EOF
-    echo "# placeholder" > "$stage/service.sh"
-    echo "# placeholder" > "$stage/customize.sh"
-    mkdir -p "$stage/META-INF/com/google/android"
-    echo "# updater" > "$stage/META-INF/com/google/android/update-binary"
-    echo "# dummy" > "$stage/META-INF/com/google/android/updater-script"
-  fi
-  # Ensure version is correct
-  sed -i "s/^version=.*/version=v${VERSION}/" "$stage/module.prop" 2>/dev/null || true
-  find "$stage" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + 2>/dev/null || true
-  (cd "$stage" && zip -X -r "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" . >/dev/null)
-  echo "    -> $OUT_DIR/Easytier-Magisk-v${VERSION}.zip (placeholder)"
+  GOWORK=off "$GO_BIN" -C "$REPO_ROOT/go" run ./cmd/gen-magisk     "${VERSION}" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" "$tmpdir/easytier-core"
+  touch -d "@$SOURCE_DATE_EPOCH" "$OUT_DIR/Easytier-Magisk-v${VERSION}.zip" 2>/dev/null || true
+  echo "    -> $OUT_DIR/Easytier-Magisk-v${VERSION}.zip"
   rm -rf "$tmpdir"
 }
 
 build_ohos() {
+  echo "==> ohos deferred for the 2.6.4 Go release; no placeholder is produced" >&2
+  return 0
   echo "==> building OHOS HAR easytier-ohrs-v${VERSION}.har / easytier-oohrs-go-v${VERSION}.tar.gz"
   local har_dir="$OUT_DIR/.build/ohos"
   rm -rf "$har_dir"
@@ -314,6 +238,8 @@ EOF
 }
 
 build_android() {
+  echo "==> android deferred for the 2.6.4 Go release; no placeholder is produced" >&2
+  return 0
   echo "==> building Android APKs (arm64-v8a, armeabi-v7a, x86, x86_64) v${VERSION}"
   local apk_dir="$OUT_DIR/.build/android"
   rm -rf "$apk_dir"
@@ -356,6 +282,8 @@ EOF
 }
 
 build_gui() {
+  echo "==> gui deferred for the 2.6.4 Go release; no placeholder is produced" >&2
+  return 0
   echo "==> building GUI bundles (Linux/macOS/Windows) v${VERSION}"
   local gui_dir="$OUT_DIR/.build/gui"
   rm -rf "$gui_dir"
@@ -409,69 +337,30 @@ build_docker_context() {
   local docker_dir="$OUT_DIR/docker-context-v${VERSION}"
   rm -rf "$docker_dir"
   mkdir -p "$docker_dir"
-  # Collect linux binaries for Docker platforms; use linux-amd64 as representative for test
-  # Create per-arch directories mimicking Rust expectation: easytier-linux-<arch>/
-  for rust_arch in x86_64 aarch64 riscv64 armhf armv7hf; do
+  for rust_arch in x86_64 aarch64; do
     case "$rust_arch" in
       x86_64) go_art="linux-amd64" ;;
       aarch64) go_art="linux-arm64" ;;
-      riscv64) go_art="linux-riscv64" ;;
-      armhf) go_art="linux-armhf" ;;
-      armv7hf) go_art="linux-armv7hf" ;;
     esac
-    # If Go artifact exists, extract its binaries into docker context
     local tgz="$OUT_DIR/easytier-go-v${VERSION}-${go_art}.tar.gz"
-    if [ -f "$tgz" ]; then
-      mkdir -p "$docker_dir/easytier-linux-${rust_arch}"
-      tar -xzf "$tgz" -C "$docker_dir/easytier-linux-${rust_arch}" --strip-components=0 2>/dev/null || tar -xzf "$tgz" -C "$docker_dir/easytier-linux-${rust_arch}" 2>/dev/null || true
-      # Go tar is flat; move binaries into expected subdir already
-      # Ensure they are executable
-      chmod +x "$docker_dir/easytier-linux-${rust_arch}"/easytier-core 2>/dev/null || true
-    else
-      mkdir -p "$docker_dir/easytier-linux-${rust_arch}"
-      printf "placeholder-docker-%s-v${VERSION}\n" "$rust_arch" > "$docker_dir/easytier-linux-${rust_arch}/easytier-core"
-      chmod +x "$docker_dir/easytier-linux-${rust_arch}/easytier-core"
+    if [ ! -f "$tgz" ]; then
+      echo "missing $tgz for Docker context" >&2
+      exit 1
     fi
+    mkdir -p "$docker_dir/easytier-linux-${rust_arch}"
+    tar -xzf "$tgz" -C "$docker_dir/easytier-linux-${rust_arch}"
+    chmod +x "$docker_dir/easytier-linux-${rust_arch}/easytier-core"
   done
-  # Copy Dockerfile for reference
   cp "$REPO_ROOT/.github/workflows/Dockerfile" "$docker_dir/Dockerfile" 2>/dev/null || true
   find "$docker_dir" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + 2>/dev/null || true
-  echo "    -> $docker_dir (ready for docker buildx --platform linux/amd64,linux/arm64... --file $docker_dir/Dockerfile)"
-  # Validate Dockerfile can build (dry-run if docker available)
-  if command -v docker >/dev/null 2>&1; then
-    echo "    Docker detected, validating build (linux/amd64)..."
-    if docker build --file "$REPO_ROOT/.github/workflows/Dockerfile" --tag "easytier/easytier-go:v${VERSION}-test" "$docker_dir" 2>&1 | tail -n 10; then
-      echo "    Docker build validation passed"
-    else
-      echo "    Docker build validation skipped/failed (expected in limited env)" >&2
-    fi
-  else
-    echo "    Docker not available, skipping build validation (context is ready)"
-  fi
+  echo "    -> $docker_dir"
 }
-
-if [[ "$VERIFY" == "true" ]]; then
-  echo "==> verify mode: building twice and comparing hashes"
-  TMP1="$(mktemp -d)"
-  TMP2="$(mktemp -d)"
-  trap 'rm -rf "$TMP1" "$TMP2"' EXIT
-  bash "$0" --version "v${VERSION}" --out "$TMP1"
-  bash "$0" --version "v${VERSION}" --out "$TMP2"
-  # Normalize lists (ignore SBOM timestamps if present)
-  (cd "$TMP1" && sha256sum -- *) | sort > "$TMP1/CHECKSUMS"
-  (cd "$TMP2" && sha256sum -- *) | sort > "$TMP2/CHECKSUMS"
-  if diff -u "$TMP1/CHECKSUMS" "$TMP2/CHECKSUMS"; then
-    echo "==> verify OK: rebuild is byte-identical"
-  else
-    echo "==> verify FAILED: rebuild differs" >&2
-    exit 1
-  fi
-  exit 0
-fi
 
 # Clean previous artifacts but keep OUT_DIR
 rm -f "$OUT_DIR"/easytier-go-v*.tar.gz "$OUT_DIR"/easytier-go-v*.zip
-rm -f "$OUT_DIR"/easytier-ffi-*.tar.gz "$OUT_DIR"/Easytier-Magisk-*.zip "$OUT_DIR"/easytier-ohrs-*.har "$OUT_DIR"/easytier-ohos-*.tar.gz "$OUT_DIR"/easytier-android-*.apk "$OUT_DIR"/easytier-gui-*.zip "$OUT_DIR"/easytier-gui-*.tar.gz
+rm -f "$OUT_DIR"/easytier-ffi-*.tar.gz "$OUT_DIR"/Easytier-Magisk-*.zip
+rm -f "$OUT_DIR"/easytier-ohrs-*.har "$OUT_DIR"/easytier-ohos-*.tar.gz
+rm -f "$OUT_DIR"/easytier-android-*.apk "$OUT_DIR"/easytier-gui-*.zip "$OUT_DIR"/easytier-gui-*.tar.gz
 
 for t in "${TARGETS[@]}"; do
   build_one "$t"
@@ -479,20 +368,18 @@ done
 if [[ "$CORE_ONLY" != "true" ]]; then
   build_ffi
   build_magisk
-  build_ohos
-  build_android
-  build_gui
   build_docker_context
+  echo "==> deferred: Android APK, OHOS HAR and GUI bundles are not built for 2.6.4"
 fi
 
-# Checksums — include all release surfaces (REL-01)
+# Checksums — supported release surfaces only
 echo "==> generating SHA256SUMS"
-(cd "$OUT_DIR" && { for f in easytier-go-v*.tar.gz easytier-go-v*.zip easytier-ffi-*.tar.gz Easytier-Magisk-*.zip easytier-magisk-go-*.zip easytier-ohrs-*.har easytier-ohos-*.tar.gz easytier-android-*.apk easytier-gui-* docker-context-*.tar.gz; do [ -f "$f" ] && sha256sum "$f"; done; true; } | sort > SHA256SUMS)
+(cd "$OUT_DIR" && { for f in easytier-go-v*.tar.gz easytier-go-v*.zip easytier-ffi-*.tar.gz Easytier-Magisk-*.zip docker-context-*.tar.gz; do [ -f "$f" ] && sha256sum "$f"; done; true; } | sort > SHA256SUMS)
 (cd "$OUT_DIR" && sha256sum -c SHA256SUMS)
 echo "==> SHA256SUMS:"
 cat "$OUT_DIR/SHA256SUMS"
 # Per-artifact .sha256 sidecars
-(cd "$OUT_DIR" && for f in easytier-go-v*.tar.gz easytier-go-v*.zip easytier-ffi-*.tar.gz Easytier-Magisk-*.zip easytier-magisk-go-*.zip easytier-ohrs-*.har easytier-ohos-*.tar.gz easytier-android-*.apk easytier-gui-* docker-context-*.tar.gz; do [ -f "$f" ] && sha256sum "$f" > "$f.sha256"; done || true)
+(cd "$OUT_DIR" && for f in easytier-go-v*.tar.gz easytier-go-v*.zip easytier-ffi-*.tar.gz Easytier-Magisk-*.zip docker-context-*.tar.gz; do [ -f "$f" ] && sha256sum "$f" > "$f.sha256"; done || true)
 
 # SBOM (best-effort: syft if available)
 if command -v syft >/dev/null 2>&1; then

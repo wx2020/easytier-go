@@ -19,6 +19,13 @@ perf.data
 perf.data.old
 flamegraph.svg
 
+# Local scratch space (probe outputs, oracle binaries, temp scripts)
+/.tmp/
+
+# LuCI app build artifacts (binaries and packaged archives)
+/luci-app-easytier/bin/
+/luci-app-easytier/build/
+
 root-target
 
 nohup.out

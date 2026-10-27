@@ -3,6 +3,12 @@
 > 生成日期：2026-09-11。
 > 方法：对照 Rust oracle（`easytier/` 2.6.4，commit 8428a89d）逐模块盘点 `go/` 实现，
 > 并结合 GitHub Actions 实际运行结果（run 34613259861 `Go`、34613259972 `Rust-Go Interop`）。
+> **2026-10-20 status note:** the authoritative row status is now
+> `docs/GO_REWRITE_TODOLIST.md` §4/§6 (46 complete / 17 in-progress). Live
+> interop and F50 deployment evidence is in
+> `docs/INTEROP_LIVE_100.64.0.2.md` and `docs/LUCI_EASYTIER_F50.md`.
+> The sections below are retained as the historical static-analysis record.
+
 > 遵循 `docs/CLEAN_ROOM.md`：补齐差距必须从 `docs/GO_REWRITE_SE.md` 规范与
 > `go/testdata/compat/` 金标准向量出发实现**行为对齐**，禁止逐行翻译 Rust 源码。
 
