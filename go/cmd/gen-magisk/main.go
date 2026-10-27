@@ -6,18 +6,30 @@ import (
 	"archive/zip"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
 
 func main() {
-	if len(os.Args) != 3 {
-		fmt.Fprintf(os.Stderr, "usage: %s <version> <out>\n", os.Args[0])
+	if len(os.Args) != 4 {
+		fmt.Fprintf(os.Stderr, "usage: %s <version> <out> <linux-arm64-core-binary>\n", os.Args[0])
 		os.Exit(2)
 	}
 	ver := strings.TrimPrefix(os.Args[1], "v")
 	ver = "v" + ver
 	out := os.Args[2]
+	corePath := os.Args[3]
+
+	coreBytes, err := os.ReadFile(corePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read core binary %q: %v\n", corePath, err)
+		os.Exit(2)
+	}
+	if len(coreBytes) < 1024 || string(coreBytes[:4]) != "\x7fELF" {
+		fmt.Fprintf(os.Stderr, "refusing to package %q: not a real ELF binary (%d bytes)\n", corePath, len(coreBytes))
+		os.Exit(2)
+	}
 
 	// Reproduce platform.DefaultMagiskModule & BuildMagiskZip deterministically
 	// without requiring go/platform workspace (GOWORK=off friendly).
@@ -35,7 +47,7 @@ func main() {
 		"config/command_args_sample": "--hostname example\n",
 		"META-INF/com/google/android/update-binary":  "# updater\n",
 		"META-INF/com/google/android/updater-script": "# dummy\n",
-		"system/bin/easytier-core":                   "binary placeholder\n",
+		"system/bin/easytier-core":                   string(coreBytes),
 	}
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -53,7 +65,14 @@ func main() {
 		}
 	}
 	for _, name := range keys {
-		w, err := zw.Create(name)
+		var w io.Writer
+		if name == "system/bin/easytier-core" {
+			header := &zip.FileHeader{Name: name, Method: zip.Deflate}
+			header.SetMode(0o755)
+			w, err = zw.CreateHeader(header)
+		} else {
+			w, err = zw.Create(name)
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

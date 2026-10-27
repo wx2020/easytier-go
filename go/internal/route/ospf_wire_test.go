@@ -16,12 +16,17 @@ import (
 // link costs do not travel (the reference conn graph is unweighted).
 func TestSyncRequestRoundTrip(t *testing.T) {
 	advertisement := Advertisement{
-		Origin:     7,
-		Version:    9,
-		Timestamp:  1700000000,
-		Peers:      []PeerCost{{Peer: 3, Cost: 4}, {Peer: 11, Cost: 1}},
-		ProxyCIDRs: []string{"10.0.0.0/24", "192.168.1.0/24"},
-		UDPNatType: common.NatType_FullCone,
+		Origin:          7,
+		Version:         9,
+		Timestamp:       1700000000,
+		Peers:           []PeerCost{{Peer: 3, Cost: 4}, {Peer: 11, Cost: 1}},
+		ProxyCIDRs:      []string{"10.0.0.0/24", "192.168.1.0/24"},
+		UDPNatType:      common.NatType_FullCone,
+		TCPNatType:      common.NatType_NoPAT,
+		Hostname:        "go-node-7",
+		IPv4:            "10.64.0.250/24",
+		IPv6:            "2001:db8::1/64",
+		EasytierVersion: "v2.6.4-gointerop",
 	}
 	request, err := syncRequestFromAdvertisement(advertisement, 0x1234)
 	if err != nil {
@@ -54,6 +59,21 @@ func TestSyncRequestRoundTrip(t *testing.T) {
 	}
 	if got.UDPNatType != advertisement.UDPNatType {
 		t.Fatalf("udp nat type = %v, want %v", got.UDPNatType, advertisement.UDPNatType)
+	}
+	if got.Hostname != advertisement.Hostname {
+		t.Fatalf("hostname = %q, want %q", got.Hostname, advertisement.Hostname)
+	}
+	if got.IPv4 != advertisement.IPv4 {
+		t.Fatalf("ipv4 = %q, want %q", got.IPv4, advertisement.IPv4)
+	}
+	if got.IPv6 != advertisement.IPv6 {
+		t.Fatalf("ipv6 = %q, want %q", got.IPv6, advertisement.IPv6)
+	}
+	if got.EasytierVersion != advertisement.EasytierVersion {
+		t.Fatalf("version = %q, want %q", got.EasytierVersion, advertisement.EasytierVersion)
+	}
+	if got.TCPNatType != advertisement.TCPNatType {
+		t.Fatalf("tcp nat type = %v, want %v", got.TCPNatType, advertisement.TCPNatType)
 	}
 	if len(got.Peers) != len(advertisement.Peers) {
 		t.Fatalf("edges = %d, want %d", len(got.Peers), len(advertisement.Peers))

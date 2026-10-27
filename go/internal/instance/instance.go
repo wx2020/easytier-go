@@ -291,6 +291,20 @@ func (m *InstanceManager) CloseAll() error {
 	return errors.Join(errs...)
 }
 
+// Remove stops the named instance and unregisters it so the same name can be
+// added again. Removing an absent instance is a successful no-op.
+func (m *InstanceManager) Remove(name string) error {
+	m.mu.RLock()
+	managed := m.instances[name]
+	m.mu.RUnlock()
+	if managed == nil {
+		return nil
+	}
+	err := m.Stop(name)
+	m.remove(managed)
+	return err
+}
+
 func (m *InstanceManager) remove(managed *managedInstance) {
 	m.mu.Lock()
 	if m.instances[managed.name] == managed {

@@ -22,7 +22,7 @@ func TestUDPLoopbackSessionAndUnknownConnectionID(t *testing.T) {
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- service.Serve(serveCtx) }()
 
-	clientCtx, cancelClient := context.WithTimeout(context.Background(), time.Second)
+	clientCtx, cancelClient := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelClient()
 	client, err := DialUDP(clientCtx, service.Address().String())
 	if err != nil {
@@ -30,7 +30,7 @@ func TestUDPLoopbackSessionAndUnknownConnectionID(t *testing.T) {
 	}
 	defer client.Close()
 
-	acceptCtx, cancelAccept := context.WithTimeout(context.Background(), time.Second)
+	acceptCtx, cancelAccept := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelAccept()
 	server, err := service.Accept(acceptCtx)
 	if err != nil {

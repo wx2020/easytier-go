@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"net/netip"
+
 	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 )
 
@@ -209,5 +211,25 @@ func TestFlooderPropagatesNATType(t *testing.T) {
 	}
 	if flooder.UDPNatType(9) != common.NatType_Symmetric {
 		t.Fatalf("remote lookup = %v", flooder.UDPNatType(9))
+	}
+}
+
+func TestFlooderPeerForIP(t *testing.T) {
+	flooder, err := NewFlooder(7, nil, func(ctx context.Context, a Advertisement, e uint32) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	flooder.SetLocalInfo(LocalPeerInfo{Hostname: "go-tcp", IPv4: "10.64.0.50/24"})
+	if _, err := flooder.Originate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := flooder.PeerForIP(netip.MustParseAddr("10.64.0.50")); got != 7 {
+		t.Fatalf("PeerForIP = %d, want 7", got)
+	}
+	if got := flooder.PeerForIP(netip.MustParseAddr("10.64.0.99")); got != 0 {
+		t.Fatalf("PeerForIP for a same-subnet non-host address = %d, want 0", got)
+	}
+	if got := flooder.PeerForIP(netip.MustParseAddr("10.65.0.1")); got != 0 {
+		t.Fatalf("PeerForIP for unknown address = %d, want 0", got)
 	}
 }

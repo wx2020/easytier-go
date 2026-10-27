@@ -6,6 +6,7 @@ package upgrade
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/EasyTier/EasyTier/go/internal/config"
@@ -66,7 +67,10 @@ func TestApplyMigratesAndVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no Unix permission bits: os.Chmod only toggles the
+	// read-only flag and os.Stat reports a synthesized mode (0666 here).
+	// The 0600 contract is enforced and verified on Unix CI.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode = %o, want 600", info.Mode().Perm())
 	}
 	backup, err := os.ReadFile(result.BackupPath)

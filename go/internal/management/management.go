@@ -117,6 +117,16 @@ type ConfigInfo struct {
 type PeerInfo struct {
 	ID        uint32 `json:"id"`
 	PeerCount int    `json:"peer_count"`
+	// The fields below are populated from the OSPF self-descriptions when the
+	// runtime exposes them; older clients can ignore them.
+	Hostname    string  `json:"hostname,omitempty"`
+	IPv4        string  `json:"ipv4,omitempty"`
+	IPv6        string  `json:"ipv6,omitempty"`
+	Version     string  `json:"version,omitempty"`
+	NextHop     uint32  `json:"next_hop,omitempty"`
+	Cost        uint64  `json:"cost,omitempty"`
+	LatencyMS   float64 `json:"latency_ms,omitempty"`
+	PeerRouteID uint64  `json:"peer_route_id,omitempty"`
 }
 
 type ConnectorInfo struct {
@@ -260,6 +270,8 @@ type ServiceOptions struct {
 	UpdateConfig    func(context.Context, config.Config) error
 	Peers           *peer.PeerConnectionManager
 	Routes          *route.Engine
+	OSPF            *route.Flooder
+	OSPFProvider    func() *route.Flooder
 	Connectors      []ConnectorInfo
 	Forwards        *forward.Manager
 	ACL             *acl.Policy
@@ -367,6 +379,8 @@ type Service struct {
 	updateConfig         func(context.Context, config.Config) error
 	peers                *peer.PeerConnectionManager
 	routes               *route.Engine
+	ospf                 *route.Flooder
+	ospfProvider         func() *route.Flooder
 	connectors           []ConnectorInfo
 	connectorsFromConfig bool
 	forwards             *forward.Manager
@@ -404,6 +418,8 @@ func NewServiceWithOptions(options ServiceOptions) *Service {
 		logger:               options.Logger,
 		peers:                options.Peers,
 		routes:               options.Routes,
+		ospf:                 options.OSPF,
+		ospfProvider:         options.OSPFProvider,
 		connectors:           append([]ConnectorInfo(nil), options.Connectors...),
 		connectorsFromConfig: connectorsFromConfig,
 		forwards:             options.Forwards,
@@ -1044,8 +1060,72 @@ func cloneLabels(labels map[string]string) map[string]string {
 }
 
 // PeerList returns authenticated live sessions sorted by peer ID.
+func (s *Service) ospfRuntime() *route.Flooder {
+	if s == nil {
+		return nil
+	}
+	if s.ospfProvider != nil {
+		if flooder := s.ospfProvider(); flooder != nil {
+			return flooder
+		}
+	}
+	return s.ospf
+}
+
 func (s *Service) PeerList() ([]PeerInfo, error) {
-	if s == nil || s.peers == nil {
+	if s == nil {
+		return nil, ErrUnsupported
+	}
+	ospf := s.ospfRuntime()
+	// Prefer the OSPF self-descriptions: they carry hostname, overlay address
+	// and build version that the raw peer session does not retain.
+	if ospf != nil {
+		advertisements := ospf.Table().Advertisements()
+		nextHop := make(map[uint32]uint32)
+		cost := make(map[uint32]uint64)
+		for _, r := range ospf.Table().Snapshot() {
+			nextHop[r.Destination] = r.NextHop
+			cost[r.Destination] = r.Cost
+		}
+		result := make([]PeerInfo, 0, len(advertisements))
+		seen := make(map[uint32]bool, len(advertisements))
+		for _, adv := range advertisements {
+			info := PeerInfo{
+				ID:          adv.Origin,
+				PeerCount:   1,
+				Hostname:    adv.Hostname,
+				IPv4:        adv.IPv4,
+				IPv6:        adv.IPv6,
+				Version:     adv.EasytierVersion,
+				NextHop:     nextHop[adv.Origin],
+				Cost:        cost[adv.Origin],
+				PeerRouteID: adv.PeerRouteID,
+			}
+			if s.peers != nil {
+				info.LatencyMS = float64(s.peers.PeerLatencyMS(adv.Origin))
+			}
+			result = append(result, info)
+			seen[adv.Origin] = true
+		}
+		// OSPF conn-info can report a reachable peer before its full
+		// self-description arrives (the reference sends diffs). Keep the peer
+		// visible with its route data instead of hiding it.
+		for destination, next := range nextHop {
+			if seen[destination] {
+				continue
+			}
+			info := PeerInfo{ID: destination, PeerCount: 1, NextHop: next, Cost: cost[destination]}
+			if s.peers != nil {
+				info.LatencyMS = float64(s.peers.PeerLatencyMS(destination))
+			}
+			result = append(result, info)
+		}
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+		if len(result) > 0 {
+			return dedupePeerInfo(result), nil
+		}
+	}
+	if s.peers == nil {
 		return nil, ErrUnsupported
 	}
 	peers := s.peers.Peers()
@@ -1056,14 +1136,47 @@ func (s *Service) PeerList() ([]PeerInfo, error) {
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	result := make([]PeerInfo, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, PeerInfo{ID: id, PeerCount: 1})
+		result = append(result, PeerInfo{ID: id, PeerCount: 1, LatencyMS: float64(s.peers.PeerLatencyMS(id))})
 	}
 	return result, nil
 }
 
-// RouteList returns the deterministic route-engine snapshot.
+// dedupePeerInfo collapses stale self-descriptions that share an overlay
+// address (a restarted node gets a new random peer ID; its old LSA remains in
+// the table until floodMaxAge). Prefer the local entry (cost 0), then the
+// lowest cost.
+func dedupePeerInfo(items []PeerInfo) []PeerInfo {
+	index := make(map[string]int, len(items))
+	result := make([]PeerInfo, 0, len(items))
+	for _, item := range items {
+		if item.IPv4 == "" {
+			result = append(result, item)
+			continue
+		}
+		if at, ok := index[item.IPv4]; ok {
+			if item.Cost == 0 && result[at].Cost != 0 {
+				result[at] = item
+			}
+			continue
+		}
+		index[item.IPv4] = len(result)
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+// RouteList returns the deterministic route snapshot. When OSPF is wired,
+// its converged route table is the authoritative overlay route table; the
+// legacy engine remains a fallback for embedders that do not run OSPF.
 func (s *Service) RouteList() ([]route.Route, error) {
-	if s == nil || s.routes == nil {
+	if s == nil {
+		return nil, ErrUnsupported
+	}
+	if ospf := s.ospfRuntime(); ospf != nil {
+		return ospf.Table().Snapshot(), nil
+	}
+	if s.routes == nil {
 		return nil, ErrUnsupported
 	}
 	return s.routes.Snapshot(), nil

@@ -162,6 +162,18 @@ func (s *QUICSession) Send(ctx context.Context, packet protocol.Packet) error {
 	return nil
 }
 
+// quicContextReader adapts Connection.ReadContext to the io.Reader used by
+// protocol.ReadStreamFrame so a canceled Receive cannot block on a stalled
+// stream.
+type quicContextReader struct {
+	ctx  context.Context
+	conn *quicwire.Connection
+}
+
+func (r quicContextReader) Read(p []byte) (int, error) {
+	return r.conn.ReadContext(r.ctx, p)
+}
+
 // Receive reads one bounded EasyTier frame from QUIC stream 0.
 func (s *QUICSession) Receive(ctx context.Context) (protocol.Packet, error) {
 	if ctx == nil {
@@ -180,8 +192,9 @@ func (s *QUICSession) Receive(ctx context.Context) (protocol.Packet, error) {
 	default:
 	}
 
-	// Stream frames can be read up to DefaultMaxStreamFrameSize (2000) or larger
-	packet, err := protocol.ReadStreamFrame(s.conn, 65535)
+	// Stream frames can be read up to DefaultMaxStreamFrameSize (2000) or larger.
+	// The context-aware reader keeps a stalled peer from blocking forever.
+	packet, err := protocol.ReadStreamFrame(quicContextReader{ctx: ctx, conn: s.conn}, 65535)
 	if err != nil {
 		return protocol.Packet{}, mapContextError(ctx, err)
 	}

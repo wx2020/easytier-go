@@ -7,11 +7,14 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/EasyTier/EasyTier/go/internal/proto/common"
 	peerrpc "github.com/EasyTier/EasyTier/go/internal/proto/peer_rpc"
 )
 
@@ -32,6 +35,88 @@ func NewSessionID() uint64 {
 		return uint64(time.Now().UnixNano())
 	}
 	return binary.LittleEndian.Uint64(id[:])
+}
+
+// parseIPv4Inet converts an overlay IPv4 address or CIDR into the reference
+// RoutePeerInfo representation (numerical address + prefix length).
+func parseIPv4Inet(value string) (uint32, uint32, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, 0, false
+	}
+	var addr netip.Addr
+	bits := 32
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		addr, bits = prefix.Addr(), prefix.Bits()
+	} else if parsed, err := netip.ParseAddr(value); err == nil {
+		addr = parsed
+	} else {
+		return 0, 0, false
+	}
+	addr = addr.Unmap()
+	if !addr.Is4() {
+		return 0, 0, false
+	}
+	octets := addr.As4()
+	return binary.BigEndian.Uint32(octets[:]), uint32(bits), true
+}
+
+// parseIPv6Inet converts an overlay IPv6 address or CIDR into the reference
+// RoutePeerInfo representation.
+func parseIPv6Inet(value string) (*common.Ipv6Addr, uint32, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, 0, false
+	}
+	var addr netip.Addr
+	bits := 128
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		addr, bits = prefix.Addr(), prefix.Bits()
+	} else if parsed, err := netip.ParseAddr(value); err == nil {
+		addr = parsed
+	} else {
+		return nil, 0, false
+	}
+	if !addr.Is6() || addr.Is4In6() {
+		return nil, 0, false
+	}
+	octets := addr.As16()
+	return &common.Ipv6Addr{
+		Part1: binary.BigEndian.Uint32(octets[0:4]),
+		Part2: binary.BigEndian.Uint32(octets[4:8]),
+		Part3: binary.BigEndian.Uint32(octets[8:12]),
+		Part4: binary.BigEndian.Uint32(octets[12:16]),
+	}, uint32(bits), true
+}
+
+func formatIPv4Inet(addr *common.Ipv4Addr, networkLength uint32) string {
+	if addr == nil {
+		return ""
+	}
+	var octets [4]byte
+	binary.BigEndian.PutUint32(octets[:], addr.GetAddr())
+	ip := netip.AddrFrom4(octets)
+	if networkLength == 0 || networkLength > 32 {
+		return ip.String()
+	}
+	return fmt.Sprintf("%s/%d", ip, networkLength)
+}
+
+func formatIPv6Inet(inet *common.Ipv6Inet) string {
+	if inet == nil || inet.GetAddress() == nil {
+		return ""
+	}
+	addr := inet.GetAddress()
+	var octets [16]byte
+	binary.BigEndian.PutUint32(octets[0:4], addr.GetPart1())
+	binary.BigEndian.PutUint32(octets[4:8], addr.GetPart2())
+	binary.BigEndian.PutUint32(octets[8:12], addr.GetPart3())
+	binary.BigEndian.PutUint32(octets[12:16], addr.GetPart4())
+	ip := netip.AddrFrom16(octets)
+	if inet.GetNetworkLength() == 0 || inet.GetNetworkLength() > 128 {
+		return ip.String()
+	}
+	return fmt.Sprintf("%s/%d", ip, inet.GetNetworkLength())
 }
 
 // syncRequestFromAdvertisement encodes one LSA into the reference
@@ -57,20 +142,36 @@ func syncRequestFromAdvertisement(adv Advertisement, sessionID uint64) (*peerrpc
 		connected = append(connected, peer.Peer)
 	}
 
+	self := &peerrpc.RoutePeerInfo{
+		PeerId:                   adv.Origin,
+		Cost:                     0,
+		Version:                  version,
+		LastUpdate:               lastUpdate,
+		ProxyCidrs:               append([]string(nil), cidrs...),
+		UdpNatType:               adv.UDPNatType,
+		PeerRouteId:              adv.PeerRouteID,
+		TrustedCredentialPubkeys: adv.TrustedCredentials,
+		EasytierVersion:          adv.EasytierVersion,
+		TcpNatType:               adv.TCPNatType,
+		FeatureFlag:              &common.PeerFeatureFlag{SupportConnListSync: true},
+	}
+	if adv.Hostname != "" {
+		hostname := adv.Hostname
+		self.Hostname = &hostname
+	}
+	if addr, bits, ok := parseIPv4Inet(adv.IPv4); ok {
+		self.Ipv4Addr = &common.Ipv4Addr{Addr: addr}
+		self.NetworkLength = bits
+	}
+	if addr, bits, ok := parseIPv6Inet(adv.IPv6); ok {
+		self.Ipv6Addr = &common.Ipv6Inet{Address: addr, NetworkLength: bits}
+	}
+
 	return &peerrpc.SyncRouteInfoRequest{
 		MyPeerId:    adv.Origin,
 		MySessionId: sessionID,
 		IsInitiator: true,
-		PeerInfos: &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{{
-			PeerId:                   adv.Origin,
-			Cost:                     0,
-			Version:                  version,
-			LastUpdate:               lastUpdate,
-			ProxyCidrs:               append([]string(nil), cidrs...),
-			UdpNatType:               adv.UDPNatType,
-			PeerRouteId:              adv.PeerRouteID,
-			TrustedCredentialPubkeys: adv.TrustedCredentials,
-		}}},
+		PeerInfos:   &peerrpc.RoutePeerInfos{Items: []*peerrpc.RoutePeerInfo{self}},
 		ConnInfo: &peerrpc.SyncRouteInfoRequest_ConnPeerList{
 			ConnPeerList: &peerrpc.RouteConnPeerList{
 				PeerConnInfos: []*peerrpc.RouteConnPeerList_PeerConnInfo{{
@@ -140,6 +241,11 @@ func advertisementsFromSyncRequest(req *peerrpc.SyncRouteInfoRequest, fromPeerID
 			ProxyCIDRs:         append([]string(nil), item.GetProxyCidrs()...),
 			UDPNatType:         item.GetUdpNatType(),
 			TrustedCredentials: item.GetTrustedCredentialPubkeys(),
+			Hostname:           item.GetHostname(),
+			IPv4:               formatIPv4Inet(item.GetIpv4Addr(), item.GetNetworkLength()),
+			IPv6:               formatIPv6Inet(item.GetIpv6Addr()),
+			EasytierVersion:    item.GetEasytierVersion(),
+			TCPNatType:         item.GetTcpNatType(),
 		}
 		if item.GetLastUpdate() != nil {
 			adv.Timestamp = item.GetLastUpdate().GetSeconds()

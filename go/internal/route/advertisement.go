@@ -48,6 +48,22 @@ type Advertisement struct {
 	// TrustedCredentials carries the admin-signed credential proofs published
 	// by the origin (reference RoutePeerInfo.trusted_credential_pubkeys).
 	TrustedCredentials []*peerrpc.TrustedCredentialPubkeyProof
+	// Hostname is the origin's advertised hostname (reference
+	// RoutePeerInfo.hostname). Empty when the node has no hostname.
+	Hostname string
+	// IPv4 is the origin's advertised overlay CIDR (reference
+	// RoutePeerInfo.ipv4_addr + network_length). Empty for no-TUN nodes
+	// without a static address.
+	IPv4 string
+	// IPv6 is the origin's advertised overlay IPv6 CIDR (reference
+	// RoutePeerInfo.ipv6_addr). Optional.
+	IPv6 string
+	// EasytierVersion is the origin's build version (reference
+	// RoutePeerInfo.easytier_version).
+	EasytierVersion string
+	// TCPNatType is the origin's self-reported TCP NAT classification
+	// (reference RoutePeerInfo.tcp_nat_type).
+	TCPNatType common.NatType
 }
 
 // Marshal encodes an advertisement in a deterministic, bounded binary format.

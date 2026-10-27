@@ -281,9 +281,6 @@ func readRequest(connection net.Conn) (string, byte, bool) {
 	if header[0] != version || header[2] != 0 {
 		return "", replyGeneralFailure, false
 	}
-	if header[1] != commandConnect {
-		return "", replyCommandNotSupported, true
-	}
 
 	var host string
 	switch header[3] {
@@ -316,6 +313,12 @@ func readRequest(connection net.Conn) (string, byte, bool) {
 	var portBytes [2]byte
 	if _, err := io.ReadFull(connection, portBytes[:]); err != nil {
 		return "", replyGeneralFailure, false
+	}
+	// Consume the full request before reporting an unsupported command.
+	// Closing with unread bytes makes Windows send a TCP RST, which can
+	// discard the reply the client is waiting for.
+	if header[1] != commandConnect {
+		return "", replyCommandNotSupported, true
 	}
 	return net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(portBytes[:])))), replySucceeded, true
 }

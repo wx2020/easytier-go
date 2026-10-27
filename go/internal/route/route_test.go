@@ -19,6 +19,8 @@ func TestSnapshotDirectRoute(t *testing.T) {
 }
 
 func TestSnapshotMultiHopRoute(t *testing.T) {
+	// The route table minimizes the summed edge cost (the committed golden
+	// vectors pin this behaviour), so the cheaper two-hop path wins here.
 	engine := NewEngine(1)
 	engine.AddLink(1, 2, 3)
 	engine.AddLink(2, 3, 4)
@@ -30,6 +32,38 @@ func TestSnapshotMultiHopRoute(t *testing.T) {
 	}
 	if got := engine.Snapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Snapshot() = %#v, want %#v", got, want)
+	}
+}
+
+// TestSnapshotDirectPeerBeatsRelayPath pins the behaviour the F50 needs: a
+// peer we hold a direct session with is reached directly, because a direct
+// link is advertised with a hop cost of one while the relayed path costs two
+// hops. Advertising the latency instead of the hop count used to make the
+// relay look cheaper and kept the traffic away from the direct session.
+func TestSnapshotDirectPeerBeatsRelayPath(t *testing.T) {
+	engine := NewEngine(1)
+	engine.AddLink(1, 20, 1)  // direct session, hop cost
+	engine.AddLink(1, 10, 1)  // relay first hop
+	engine.AddLink(10, 20, 1) // relay second hop
+
+	routes := engine.Snapshot()
+	want := Route{Destination: 20, NextHop: 20, Cost: 1}
+	if got := routeTo(routes, 20); got != want {
+		t.Fatalf("route to 20 = %#v, want %#v", got, want)
+	}
+}
+
+// TestSnapshotRelayPathUsedWhenNoDirectLink covers the complementary case:
+// without a direct link the peer is reached through the relay.
+func TestSnapshotRelayPathUsedWhenNoDirectLink(t *testing.T) {
+	engine := NewEngine(1)
+	engine.AddLink(1, 10, 1)
+	engine.AddLink(10, 20, 1)
+
+	routes := engine.Snapshot()
+	want := Route{Destination: 20, NextHop: 10, Cost: 2}
+	if got := routeTo(routes, 20); got != want {
+		t.Fatalf("route to 20 = %#v, want %#v", got, want)
 	}
 }
 

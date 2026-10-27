@@ -421,6 +421,23 @@ func canListen(address string) bool {
 	return true
 }
 
+func TestRandomPeerIDIsNonZeroAndVaries(t *testing.T) {
+	seen := make(map[uint32]bool)
+	for i := 0; i < 16; i++ {
+		id, err := randomPeerID()
+		if err != nil {
+			t.Fatalf("randomPeerID: %v", err)
+		}
+		if id == 0 {
+			t.Fatal("randomPeerID returned 0")
+		}
+		seen[id] = true
+	}
+	if len(seen) < 2 {
+		t.Fatal("randomPeerID returned the same value for every call")
+	}
+}
+
 func freeTCPAddress(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

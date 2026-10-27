@@ -40,6 +40,22 @@ func (t *ConvergenceTable) Accept(advertisement Advertisement) bool {
 	return true
 }
 
+// Advertisements returns a copy of all currently accepted self-descriptions,
+// sorted by origin. It is used by the management API to expose peer hostname,
+// overlay address and build version without recomputing routes.
+func (t *ConvergenceTable) Advertisements() []Advertisement {
+	t.mu.RLock()
+	advertisements := make([]Advertisement, 0, len(t.advertisements))
+	for _, advertisement := range t.advertisements {
+		advertisements = append(advertisements, cloneAdvertisement(advertisement))
+	}
+	t.mu.RUnlock()
+	sort.Slice(advertisements, func(i, j int) bool {
+		return advertisements[i].Origin < advertisements[j].Origin
+	})
+	return advertisements
+}
+
 // Snapshot returns shortest routes over all currently accepted advertisements.
 func (t *ConvergenceTable) Snapshot() []Route {
 	t.mu.RLock()

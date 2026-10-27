@@ -6,6 +6,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +79,37 @@ func TestQUICTunnelPingPong(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestQUICSessionReceiveHonorsContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	svc, err := ListenQUIC("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("ListenQUIC: %v", err)
+	}
+	defer svc.Close()
+
+	go func() { _ = svc.Serve(ctx) }()
+
+	session, err := DialQUIC(ctx, svc.Address().String())
+	if err != nil {
+		t.Fatalf("DialQUIC: %v", err)
+	}
+	defer session.Close()
+
+	recvCtx, recvCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer recvCancel()
+	start := time.Now()
+	_, err = session.Receive(recvCtx)
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Receive error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("Receive took %v; context cancellation was not honored", elapsed)
+	}
 }
 
 func TestQUICPacketChannelIntegration(t *testing.T) {

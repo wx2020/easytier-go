@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +15,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/EasyTier/EasyTier/go/internal/config"
 	"github.com/EasyTier/EasyTier/go/internal/core"
@@ -29,7 +33,6 @@ import (
 	"github.com/EasyTier/EasyTier/go/internal/stats"
 	"github.com/EasyTier/EasyTier/go/internal/tun"
 	"github.com/EasyTier/EasyTier/go/internal/vpnportal"
-	"github.com/EasyTier/EasyTier/go/internal/webclient"
 )
 
 var version = "0.0.0-dev"
@@ -203,50 +206,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	// Wire --config-server / ET_CONFIG_SERVER to webclient.Client like Rust core.rs:93.
-	// For now the client runs with reconnect backoff and heartbeat; config updates are logged.
-	var wc *webclient.Client
-	var wcCancel context.CancelFunc
+	// `-w <url>` hosts the web-console session and takes its network instances
+	// from the console, exactly like the reference daemon: no local
+	// configuration is loaded on this path.
 	if options.configServer != "" {
-		machineID := options.machineID
-		if machineID == "" {
-			if h, err := os.Hostname(); err == nil && h != "" {
-				machineID = h
-			} else {
-				machineID = "default-machine"
-			}
-		}
-		machineName := options.hostname
-		if machineName == "" {
-			if h, err := os.Hostname(); err == nil {
-				machineName = h
-			}
-		}
-		client, err := webclient.NewClient(webclient.ClientConfig{
-			Address:     options.configServer,
-			MachineID:   machineID,
-			MachineName: machineName,
-			Version:     version,
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "easytier-core: config server %q: %v\n", options.configServer, err)
-		} else {
-			wc = client
-			wcCtx, cancel := context.WithCancel(ctx)
-			wcCancel = cancel
-			go func() {
-				if err := wc.Run(wcCtx); err != nil {
-					fmt.Fprintf(stderr, "easytier-core: config server stopped: %v\n", err)
-				}
-			}()
-			fmt.Fprintf(stderr, "easytier-core: config server %s started (machine %s)\n", options.configServer, machineID)
-		}
-	}
-	if wcCancel != nil {
-		defer wcCancel()
-	}
-	if wc != nil {
-		defer func() { _ = wc.Close() }()
+		return runWebConsole(ctx, options, stdout, stderr)
 	}
 	for _, cfg := range configs {
 		if len(cfg.Listeners) == 0 {
@@ -283,6 +247,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if node == nil {
 		return commandError(stderr, 1, errors.New("first configuration instance did not start"))
 	}
+	nodeID := fmt.Sprintf("%d", node.PeerManager().LocalPeerID())
 	cfg := configs[0]
 	managementConfig := &cfg
 	managementName := cfg.InstanceName
@@ -302,7 +267,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	service := management.NewServiceWithOptions(management.ServiceOptions{
 		NodeInfo: management.NodeInfo{
-			ID:      node.Address().String(),
+			ID:      nodeID,
 			Name:    managementName,
 			Version: version,
 		},
@@ -312,8 +277,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Config:         managementConfig,
 		ConfigReadOnly: len(configs) == 1 && len(loadedConfigs) == 1 && loadedConfigs[0].ReadOnly,
 		Peers:          node.PeerManager(),
+		OSPF:           node.OSPF(),
+		OSPFProvider:   node.OSPF,
 		Connectors:     configuredConnectors(cfg),
-		MetricLabels:   map[string]string{"node_id": node.Address().String(), "instance": managementName},
+		MetricLabels:   map[string]string{"node_id": nodeID, "instance": managementName},
 		VPNPortal:      vpnPortal,
 	})
 	portal, err := rpc.NewServer(loopbackWhitelist(), service.Handler)
@@ -357,8 +324,26 @@ func newCoreNode(address string, identity *peerIdentity) (*core.Node, error) {
 	return core.ListenWithIdentity(address, 0, &identity.value)
 }
 
+// randomPeerID mirrors the reference node's per-start random u32 peer ID.
+// A fixed ID would make every Go node collide with every other Go node.
+func randomPeerID() (uint32, error) {
+	var buf [4]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return 0, err
+	}
+	id := binary.BigEndian.Uint32(buf[:])
+	if id == 0 {
+		id = 1
+	}
+	return id, nil
+}
+
 func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*core.Node, error) {
-	identity, err := cfg.LegacyIdentity(2)
+	peerID, err := randomPeerID()
+	if err != nil {
+		return nil, fmt.Errorf("generate peer id: %w", err)
+	}
+	identity, err := cfg.LegacyIdentity(peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -386,28 +371,16 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 		}
 		enableEncryption = cfg.Flags.EnableEncryption
 		devName = cfg.Flags.DevName
-		_ = devName
 	}
 	// MTU effective handling
 	effectiveMTU := tun.EffectiveMTU(mtu, enableEncryption)
 	// Determine if TUN should be created (static IP or DHCP or explicit)
 	shouldCreateTUN := !noTun && (cfg.DHCP || strings.TrimSpace(cfg.IPv4) != "" || strings.TrimSpace(cfg.IPv6) != "")
 	var tunDevice tun.Device
+	var tunAddresses *tun.AssignedAddresses
 	var tunMTU int
 	var tunDestination uint32
 	if shouldCreateTUN {
-		// Prefer MemoryDevice for daemon fallback; real platform TUN would be created here
-		// with devName for Linux. For now use MemoryDevice with MTU.
-		dev, _, err := tun.NewMemoryDevicePairWithMTU(128, effectiveMTU)
-		if err != nil {
-			// fallback to simple pair
-			dev, _, err = tun.NewMemoryDevicePair(128)
-			if err != nil {
-				return nil, err
-			}
-			_ = dev.SetMTU(effectiveMTU)
-		}
-		// Resolve addresses: DHCP vs static
 		tunCfg := tun.TunConfig{
 			IPv4:             cfg.IPv4,
 			IPv6:             cfg.IPv6,
@@ -416,29 +389,49 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 			MTU:              mtu,
 			EnableEncryption: enableEncryption,
 		}
-		// For DHCP, allocate from pool; for static, assign directly.
-		assigned, err := tun.ResolveAssigned(tunCfg, nil)
-		if err == nil {
-			if assigned.IPv4 != nil {
-				_ = dev.AssignIPv4(*assigned.IPv4)
+		assigned, assignErr := tun.ResolveAssigned(tunCfg, nil)
+		if assignErr == nil {
+			tunAddresses = &assigned
+		}
+		if runtime.GOOS == "linux" {
+			// Real /dev/net/tun device: required for OS-level ICMP/TCP and
+			// for any traffic that must traverse the kernel network stack.
+			dev, err := createPlatformTUN(devName, int(effectiveMTU), cfg.IPv4, cfg.IPv6)
+			if err != nil {
+				return nil, err
 			}
-			if assigned.IPv6 != nil {
-				_ = dev.AssignIPv6(*assigned.IPv6)
+			tunDevice = dev
+			tunMTU = int(effectiveMTU)
+			if assignErr == nil && assigned.MTU > 0 {
+				tunMTU = int(assigned.MTU)
 			}
-			if assigned.MTU > 0 {
-				effectiveMTU = assigned.MTU
+			tunDestination = 0
+		} else {
+			// Non-Linux host fallback: in-memory device for tests/desktop.
+			dev, _, err := tun.NewMemoryDevicePairWithMTU(128, effectiveMTU)
+			if err != nil {
+				dev, _, err = tun.NewMemoryDevicePair(128)
+				if err != nil {
+					return nil, err
+				}
 				_ = dev.SetMTU(effectiveMTU)
 			}
+			if assignErr == nil {
+				if assigned.IPv4 != nil {
+					_ = dev.AssignIPv4(*assigned.IPv4)
+				}
+				if assigned.IPv6 != nil {
+					_ = dev.AssignIPv6(*assigned.IPv6)
+				}
+				if assigned.MTU > 0 {
+					effectiveMTU = assigned.MTU
+					_ = dev.SetMTU(effectiveMTU)
+				}
+			}
+			tunDevice = dev
+			tunMTU = effectiveMTU
+			tunDestination = 0
 		}
-		tunDevice = dev
-		tunMTU = effectiveMTU
-		// For daemon, destination is dynamic via routing; use 0 to indicate
-		// dynamic lookup (core will route by IP when destination is 0). For test
-		// compatibility, when a fixed destination is needed, tests will provide it
-		// directly via core.NodeOptions. Here we leave 0 for dynamic.
-		tunDestination = 0
-		// If still 0 and we have at least one peer, use first peer's ID as hint?
-		// Not required for GWY-01.
 	}
 	// When TUN was created but destination is 0, we allow it for dynamic routing.
 	// For the case where shouldCreateTUN is false, TUN remains nil (no-TUN mode).
@@ -466,9 +459,17 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 			LegacyIdentity:   identity,
 			DataCompressAlgo: algorithm,
 			LegacyCipher:     legacyCipher,
+			// Pingers measure the real RTT of each direct peer session.
+			// Without them the peer table reports the unknown-latency
+			// sentinel (1ms) for every peer, which looks like a local path.
+			PingerEnabled: true,
 		},
 		PeerCenterNetworkName: cfg.NetworkIdentity.NetworkName,
 		NetworkSecret:         cfg.NetworkIdentity.NetworkSecret,
+		EnableOSPF:            true,
+		OSPFDomain:            cfg.NetworkIdentity.NetworkName,
+		Hostname:              cfg.Hostname,
+		Version:               version,
 		NoTUN:                 noTun,
 		EnableEncryption:      enableEncryption,
 		DHCP:                  cfg.DHCP,
@@ -477,6 +478,7 @@ func newConfiguredCoreNode(tcpAddress, udpAddress string, cfg config.Config) (*c
 		TUN:                   tunDevice,
 		TUNMTU:                tunMTU,
 		TUNDestination:        tunDestination,
+		TunAddresses:          tunAddresses,
 	}
 	// Admin nodes publish their trusted credentials in the OSPF LSA so
 	// credential peers are classified at connection level.
@@ -531,6 +533,10 @@ type configuredInstance struct {
 	node      *core.Node
 	portal    *vpnportal.Portal
 	serveDone chan error
+	// proxyRoutes installs kernel routes for remote peers' proxy networks;
+	// proxyCancel stops its OSPF watcher.
+	proxyRoutes *core.ProxyRouteManager
+	proxyCancel context.CancelFunc
 }
 
 func newConfiguredInstance(lifetime context.Context, name string, cfg config.Config) *configuredInstance {
@@ -589,14 +595,96 @@ func (i *configuredInstance) Start(ctx context.Context) error {
 	i.portal = portal
 	i.serveDone = done
 	i.mu.Unlock()
+	i.startProxyRouteWatcher(node)
 	go func() { done <- node.Serve(i.lifetime) }()
 	return nil
+}
+
+// startProxyRouteWatcher keeps kernel routes for remote proxy networks in sync
+// with the OSPF table, mirroring the reference daemon's behavior: a peer that
+// advertises 192.168.5.0/24 makes that subnet reachable through this host's
+// overlay interface.
+func (i *configuredInstance) startProxyRouteWatcher(node *core.Node) {
+	watchCtx, cancel := context.WithCancel(i.lifetime)
+	manager := &core.ProxyRouteManager{IfName: proxyDeviceName(i.cfg)}
+	i.mu.Lock()
+	i.proxyRoutes = manager
+	i.proxyCancel = cancel
+	i.mu.Unlock()
+
+	sync := func() {
+		advertised := collectRemoteProxyCIDRs(node)
+		if len(advertised) == 0 {
+			return
+		}
+		added, removed, warnings, err := manager.Sync(advertised)
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "easytier-core: instance %s proxy route: %v\n", i.name, warning)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "easytier-core: instance %s proxy routes: %v\n", i.name, err)
+			return
+		}
+		for _, cidr := range added {
+			fmt.Fprintf(os.Stderr, "easytier-core: instance %s added proxy route %s\n", i.name, cidr)
+		}
+		for _, cidr := range removed {
+			fmt.Fprintf(os.Stderr, "easytier-core: instance %s removed proxy route %s\n", i.name, cidr)
+		}
+	}
+	sync()
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-ticker.C:
+				sync()
+			}
+		}
+	}()
+}
+
+// collectRemoteProxyCIDRs gathers the proxy networks advertised by other peers.
+func collectRemoteProxyCIDRs(node *core.Node) []string {
+	ospf := node.OSPF()
+	if ospf == nil {
+		return nil
+	}
+	local := node.PeerManager().LocalPeerID()
+	var cidrs []string
+	for _, advertisement := range ospf.Table().Advertisements() {
+		if advertisement.Origin == local {
+			continue
+		}
+		cidrs = append(cidrs, advertisement.ProxyCIDRs...)
+	}
+	return cidrs
+}
+
+// proxyDeviceName picks the interface proxy routes point at.
+func proxyDeviceName(cfg config.Config) string {
+	if cfg.Flags != nil && cfg.Flags.DevName != "" {
+		return cfg.Flags.DevName
+	}
+	return "easytier0"
 }
 
 func (i *configuredInstance) Close() error {
 	i.mu.Lock()
 	node, done, portal := i.node, i.serveDone, i.portal
+	proxyRoutes, proxyCancel := i.proxyRoutes, i.proxyCancel
+	i.proxyRoutes, i.proxyCancel = nil, nil
 	i.mu.Unlock()
+	if proxyCancel != nil {
+		proxyCancel()
+	}
+	var proxyErr error
+	if proxyRoutes != nil {
+		proxyErr = proxyRoutes.Clear()
+	}
 	if node == nil && portal == nil {
 		return nil
 	}
@@ -618,9 +706,9 @@ func (i *configuredInstance) Close() error {
 	i.serveDone = nil
 	i.mu.Unlock()
 	if serveErr != nil && !errors.Is(serveErr, context.Canceled) {
-		return errors.Join(portalErr, closeErr, serveErr)
+		return errors.Join(proxyErr, portalErr, closeErr, serveErr)
 	}
-	return errors.Join(portalErr, closeErr)
+	return errors.Join(proxyErr, portalErr, closeErr)
 }
 
 func (i *configuredInstance) Portal() *vpnportal.Portal {

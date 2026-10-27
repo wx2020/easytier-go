@@ -606,11 +606,26 @@ func renderPeerList(ctx context.Context, client *management.Client, output outpu
 			Peers []management.PeerInfo `json:"peers"`
 		}{items})
 	}
-	if _, err := fmt.Fprintln(stdout, "PEER ID\tCONNECTIONS"); err != nil {
+	if _, err := fmt.Fprintln(stdout, "PEER ID\tHOSTNAME\tIPV4\tVERSION\tLAT(ms)\tNEXT HOP\tCOST"); err != nil {
 		return err
 	}
 	for _, item := range items {
-		if _, err := fmt.Fprintf(stdout, "%d\t%d\n", item.ID, item.PeerCount); err != nil {
+		hostname, ipv4, version := item.Hostname, item.IPv4, item.Version
+		if hostname == "" {
+			hostname = "-"
+		}
+		if ipv4 == "" {
+			ipv4 = "-"
+		}
+		if version == "" {
+			version = "-"
+		}
+		latency := "-"
+		if item.LatencyMS > 0 {
+			latency = fmt.Sprintf("%.1f", item.LatencyMS)
+		}
+		if _, err := fmt.Fprintf(stdout, "%d\t%s\t%s\t%s\t%s\t%d\t%d\n",
+			item.ID, hostname, ipv4, version, latency, item.NextHop, item.Cost); err != nil {
 			return err
 		}
 	}

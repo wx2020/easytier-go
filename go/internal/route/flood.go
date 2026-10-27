@@ -15,6 +15,7 @@ package route
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,15 @@ const (
 // implementation may send over peer-RPC mesh or any other transport.
 type BroadcastFunc func(ctx context.Context, advertisement Advertisement, exceptOrigin uint32) error
 
+// LocalPeerInfo is the origin's self-description published in every LSA.
+type LocalPeerInfo struct {
+	Hostname        string
+	IPv4            string
+	IPv6            string
+	EasytierVersion string
+	TCPNatType      common.NatType
+}
+
 // Flooder originates local LSAs and floods remote ones.
 type Flooder struct {
 	localPeerID uint32
@@ -44,6 +54,9 @@ type Flooder struct {
 	broadcast   BroadcastFunc
 
 	sessionID uint64
+	// localInfo is the origin's self-description (hostname, overlay address,
+	// build version) carried in every originated LSA.
+	localInfo LocalPeerInfo
 	// natTypeFn reports the local UDP NAT classification for outgoing LSAs.
 	natTypeFn          func() common.NatType
 	trustedCredentials []*peerrpc.TrustedCredentialPubkeyProof
@@ -126,6 +139,13 @@ func (f *Flooder) SetNATTypeFn(fn func() common.NatType) {
 	f.natTypeFn = fn
 }
 
+// SetLocalInfo installs the origin's self-description carried in every LSA.
+func (f *Flooder) SetLocalInfo(info LocalPeerInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.localInfo = info
+}
+
 // SetTrustedCredentials installs the admin-signed credential proofs published
 // in every originated LSA (reference RoutePeerInfo.trusted_credential_pubkeys).
 func (f *Flooder) SetTrustedCredentials(proofs []*peerrpc.TrustedCredentialPubkeyProof) {
@@ -172,6 +192,38 @@ func (f *Flooder) LocalPeerID() uint32 {
 	return f.localPeerID
 }
 
+// PeerForIP returns the origin peer whose advertised overlay prefix contains
+// addr, or 0 when no self-description matches. It is the Go equivalent of the
+// reference OSPF ipv4_peer_id_map lookup used when forwarding TUN packets.
+func (f *Flooder) PeerForIP(addr netip.Addr) uint32 {
+	if !addr.IsValid() {
+		return 0
+	}
+	for _, adv := range f.table.Advertisements() {
+		if advertisementHasIP(adv.IPv4, addr) || advertisementHasIP(adv.IPv6, addr) {
+			return adv.Origin
+		}
+	}
+	return 0
+}
+
+// advertisementHasIP reports whether value is the peer's exact overlay host
+// address. The reference RoutePeerInfo carries the host address plus a
+// network_length for display/routing; it is not a subnet claim. Proxy CIDRs
+// are a separate field and are deliberately not matched here.
+func advertisementHasIP(value string, addr netip.Addr) bool {
+	if value == "" {
+		return false
+	}
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		return prefix.Addr().Unmap() == addr.Unmap()
+	}
+	if candidate, err := netip.ParseAddr(value); err == nil {
+		return candidate.Unmap() == addr.Unmap()
+	}
+	return false
+}
+
 // Originate builds, installs, and broadcasts the local LSA, bumping the
 // version. It returns the originated advertisement.
 func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
@@ -186,6 +238,7 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 	}
 	var proofs []*peerrpc.TrustedCredentialPubkeyProof
 	proofs = append(proofs, f.trustedCredentials...)
+	localInfo := f.localInfo
 	f.mu.Unlock()
 
 	peers := make([]PeerCost, 0, len(links))
@@ -208,6 +261,11 @@ func (f *Flooder) Originate(ctx context.Context) (Advertisement, error) {
 		UDPNatType:         natType,
 		PeerRouteID:        f.sessionID,
 		TrustedCredentials: proofs,
+		Hostname:           localInfo.Hostname,
+		IPv4:               localInfo.IPv4,
+		IPv6:               localInfo.IPv6,
+		EasytierVersion:    localInfo.EasytierVersion,
+		TCPNatType:         localInfo.TCPNatType,
 	}
 	if _, _, err := validatedAdvertisement(advertisement); err != nil {
 		return Advertisement{}, err
@@ -300,6 +358,10 @@ func (f *Flooder) loop() {
 	f.mu.Lock()
 	ctx := f.ctx
 	f.mu.Unlock()
+	// Stop clears the context; a loop that starts afterwards must not use it.
+	if ctx == nil {
+		return
+	}
 	ticker := time.NewTicker(floodInterval)
 	defer ticker.Stop()
 	// Originate immediately, mirroring the reference session_task which
