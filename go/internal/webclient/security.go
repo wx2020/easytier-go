@@ -80,13 +80,24 @@ func (s *secureChannel) Send(ctx context.Context, packet protocol.Packet) error 
 	if s.session == nil {
 		return s.inner.Send(ctx, packet)
 	}
-	sealed, err := s.session.Seal(packet.Payload)
+	// The reference filter encrypts the whole inner packet (its 16-byte peer
+	// manager header included) and sends it under a fresh (0,0,Data) header,
+	// so the receiver can decrypt and re-parse the packet it forwarded.
+	inner, err := packet.MarshalBody()
+	if err != nil {
+		return fmt.Errorf("marshal inner secure packet: %w", err)
+	}
+	sealed, err := s.session.Seal(inner)
 	if err != nil {
 		return fmt.Errorf("seal web secure datagram: %w", err)
 	}
-	packet.Payload = sealed
-	packet.Header.Flags |= protocol.FlagEncrypted
-	return s.inner.Send(ctx, packet)
+	return s.inner.Send(ctx, protocol.Packet{
+		Header: protocol.PeerManagerHeader{
+			PacketType: protocol.PacketTypeData,
+			Flags:      protocol.FlagEncrypted,
+		},
+		Payload: sealed,
+	})
 }
 
 func (s *secureChannel) Receive(ctx context.Context) (protocol.Packet, error) {
@@ -97,14 +108,18 @@ func (s *secureChannel) Receive(ctx context.Context) (protocol.Packet, error) {
 	if s.session == nil {
 		return pkt, nil
 	}
-	// Decrypt payload; if not encrypted, it will fail authentication.
+	// Decrypt the payload and re-parse it as the inner packet the sender
+	// encrypted; the outer header is only transport wrapping.
 	plain, err := s.session.Open(pkt.Payload)
 	if err != nil {
 		return protocol.Packet{}, fmt.Errorf("open web secure datagram: %w", err)
 	}
-	pkt.Payload = plain
-	pkt.Header.Flags &^= protocol.FlagEncrypted
-	return pkt, nil
+	inner, err := protocol.ParseBody(plain)
+	if err != nil {
+		return protocol.Packet{}, fmt.Errorf("parse inner secure packet: %w", err)
+	}
+	inner.Header.Flags &^= protocol.FlagEncrypted
+	return inner, nil
 }
 
 func (s *secureChannel) Close() error {

@@ -5,6 +5,7 @@ package quicwire
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -91,7 +92,20 @@ func (b *recvStreamBuffer) signal() {
 
 // Read reads up to len(p) contiguous bytes starting at readOffset.
 func (b *recvStreamBuffer) Read(p []byte) (int, error) {
+	return b.ReadContext(context.Background(), p)
+}
+
+// ReadContext is Read with cancellation. It returns ctx.Err() instead of
+// blocking forever when the peer never sends the missing bytes.
+func (b *recvStreamBuffer) ReadContext(ctx context.Context, p []byte) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+
 		b.mu.Lock()
 
 		// Reassemble contiguous data
@@ -144,8 +158,12 @@ func (b *recvStreamBuffer) Read(p []byte) (int, error) {
 
 		b.mu.Unlock()
 
-		// Wait for more data
-		<-b.notifyCh
+		// Wait for more data or cancellation.
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-b.notifyCh:
+		}
 	}
 }
 

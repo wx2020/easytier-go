@@ -108,6 +108,12 @@ func (c *Connection) Read(p []byte) (int, error) {
 	return c.recvStream.Read(p)
 }
 
+// ReadContext reads stream data and returns ctx.Err() when the context is
+// canceled before the requested bytes arrive.
+func (c *Connection) ReadContext(ctx context.Context, p []byte) (int, error) {
+	return c.recvStream.ReadContext(ctx, p)
+}
+
 // Write writes stream data to be sent on Stream 0.
 func (c *Connection) Write(p []byte) (int, error) {
 	c.mu.Lock()
