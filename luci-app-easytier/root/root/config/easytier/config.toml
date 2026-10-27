@@ -1,0 +1,23 @@
+# EasyTier Go configuration — edit from LuCI or replace this file.
+instance_name = "default"
+hostname = "openwrt"
+dhcp = true
+listeners = ["tcp://0.0.0.0:11010", "udp://0.0.0.0:11010"]
+
+[network_identity]
+network_name = "default"
+network_secret = "change-me"
+
+# Add one [[peer]] block per remote node:
+# [[peer]]
+# uri = "tcp://100.64.0.2:11010"
+
+[flags]
+no_tun = true
+mtu = 1380
+dev_name = "easytier0"
+enable_encryption = true
+private_mode = true
+bind_device = false
+latency_first = true
+multi_thread = true

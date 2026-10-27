@@ -1,0 +1,11 @@
+#!/bin/sh
+[ -n "$IPKG_INSTROOT" ] || {
+    chmod 755 /www/cgi-bin/easytier-api 2>/dev/null || true
+    chmod 755 /etc/init.d/easytier 2>/dev/null || true
+    chmod 755 /usr/bin/easytier-core /usr/bin/easytier-cli 2>/dev/null || true
+    chmod 700 /root/config/easytier 2>/dev/null || true
+    chmod 600 /root/config/easytier/config.toml 2>/dev/null || true
+    /etc/init.d/easytier enable 2>/dev/null || true
+    rm -f /tmp/luci-indexcache* /tmp/luci-modulecache* 2>/dev/null || true
+}
+exit 0

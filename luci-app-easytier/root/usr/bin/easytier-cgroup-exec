@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2025 EasyTier Contributors
+# SPDX-License-Identifier: LGPL-3.0-only
+#
+# Start the EasyTier core inside its own cgroup so nftables can mark its
+# sockets by cgroup and policy routing can keep them on the main table.
+# This mirrors the cfst cgroup isolation: sing-box's table 2022 rules must
+# not capture the EasyTier control/data sockets.
+CG=/sys/fs/cgroup/easytier
+[ -d "$CG" ] || mkdir -p "$CG" 2>/dev/null
+if [ -w "$CG/cgroup.procs" ]; then
+	echo $$ > "$CG/cgroup.procs" 2>/dev/null
+fi
+exec "$@"

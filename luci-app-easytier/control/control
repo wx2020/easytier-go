@@ -1,0 +1,8 @@
+Package: luci-app-easytier
+Version: 1.0.1-1
+Depends: libc, jq, curl, luci-base
+Section: luci
+Architecture: aarch64_generic
+Maintainer: wx2020 <admin@wx2020.cn>
+Source: https://github.com/wx2020/easytier-go
+Description: LuCI web console and procd service for the EasyTier Go core on OpenWrt

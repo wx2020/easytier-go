@@ -1,0 +1,481 @@
+#!/bin/sh
+# /www/cgi-bin/easytier-api
+# Backend API for the EasyTier Go LuCI dashboard.
+# BusyBox ash compatible.
+
+printf "Content-Type: application/json; charset=utf-8\r\n"
+printf "Access-Control-Allow-Origin: *\r\n"
+printf "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+printf "Access-Control-Allow-Headers: Content-Type\r\n"
+
+if [ "$REQUEST_METHOD" = "OPTIONS" ]; then
+    printf "\r\n"
+    exit 0
+fi
+printf "\r\n"
+
+CONF="/root/config/easytier/config.toml"
+CLI="/usr/bin/easytier-cli"
+CORE="/usr/bin/easytier-core"
+INIT="/etc/init.d/easytier"
+RPC="127.0.0.1:15888"
+MANAGED="/root/config/easytier/managed.json"
+CONSOLE_STATUS="/root/config/easytier/console-status.json"
+OFFICIAL_CORE="/root/software/easytier-official/easytier-core"
+OFFICIAL_CLI="/root/software/easytier-official/easytier-cli"
+
+managed_enabled() {
+    [ -f "$MANAGED" ] || return 1
+    [ "$(jq -r '.enabled // false' "$MANAGED" 2>/dev/null)" = "true" ]
+}
+
+managed_field() {
+    jq -r --arg k "$1" --arg d "$2" '.[$k] // $d' "$MANAGED" 2>/dev/null
+}
+
+json_error() {
+    jq -n --arg error "$1" '{success: false, error: $error}'
+}
+
+get_query_param() {
+    echo "$QUERY_STRING" | tr '&' '\n' | grep "^$1=" | head -n 1 | cut -d'=' -f2- \
+        | sed 's/+/ /g; s/%2F/\//g; s/%3A/:/g; s/%20/ /g; s/%2C/,/g; s/%5B/[/g; s/%5D/]/g'
+}
+
+read_post_data() {
+    if [ "$REQUEST_METHOD" = "POST" ] && [ -n "$CONTENT_LENGTH" ] && [ "$CONTENT_LENGTH" -gt 0 ] 2>/dev/null; then
+        head -c "$CONTENT_LENGTH"
+    else
+        cat
+    fi
+}
+
+conf_value() {
+    # conf_value <key>: first quoted value of key = "..."
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\"/\1/p" "$CONF" 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+conf_number() {
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p" "$CONF" 2>/dev/null | head -n 1 | tr -d '\r'
+}
+
+conf_bool() {
+    # conf_bool <key> <default>
+    local value
+    value=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\(true\|false\).*/\1/p" "$CONF" 2>/dev/null | head -n 1 | tr -d '\r')
+    [ -n "$value" ] || value="$2"
+    echo "$value"
+}
+
+peer_list() {
+    sed -n 's/^[[:space:]]*uri[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' "$CONF" 2>/dev/null | tr -d '\r'
+}
+
+listener_list() {
+    sed -n 's/^[[:space:]]*listeners[[:space:]]*=[[:space:]]*\[\(.*\)\]/\1/p' "$CONF" 2>/dev/null | head -n 1 \
+        | tr -d '"' | tr -d '\r' | sed 's/, */\n/g'
+}
+
+ACTION=$(get_query_param "action")
+
+case "$ACTION" in
+    status)
+        PID=$(pidof easytier-core 2>/dev/null | awk '{print $1}')
+        running=false
+        uptime=0
+        if [ -n "$PID" ] && [ -d "/proc/$PID" ]; then
+            running=true
+            boot=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+            start=$(awk '{print $22}' "/proc/$PID/stat" 2>/dev/null)
+            if [ -n "$boot" ] && [ -n "$start" ]; then
+                uptime=$((boot - start / 100))
+                [ "$uptime" -lt 0 ] && uptime=0
+            fi
+        fi
+
+        version=""
+        managed=false
+        active_core=$CORE
+        active_cli=$CLI
+        if managed_enabled; then
+            managed=true
+            # managed.json "core" picks which binary actually runs: "go"
+            # (default, /usr/bin/easytier-core) or "official" (reference).
+            managed_core=$(managed_field core "go")
+            if [ "$managed_core" = "go" ] && [ -x "$CORE" ]; then
+                active_core=$CORE
+                active_cli=$CLI
+            else
+                active_core=$OFFICIAL_CORE
+                active_cli=$OFFICIAL_CLI
+            fi
+        fi
+        if [ -x "$active_core" ]; then
+            version=$("$active_core" --version 2>/dev/null | head -n 1 | awk '{print $2}')
+        fi
+
+        network_name=$(conf_value network_name)
+        hostname=$(conf_value hostname)
+        ipv4=$(conf_value ipv4)
+        dev_name=$(conf_value dev_name)
+        [ -n "$dev_name" ] || dev_name="easytier0"
+        mtu=$(conf_number mtu)
+        [ -n "$mtu" ] || mtu=1380
+        no_tun=$(conf_bool no_tun false)
+
+        autostart=false
+        if [ -e /etc/rc.d/S99easytier ]; then
+            autostart=true
+        fi
+
+        peers='{"peers":[]}'
+        routes='{"routes":[]}'
+        if [ "$running" = "true" ] && [ -x "$active_cli" ]; then
+            p=$("$active_cli" -p "$RPC" -o json peer 2>/dev/null)
+            if echo "$p" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                # The official Rust CLI emits an array with different field
+                # names (cidr/lat_ms/cost). Normalise to the schema the LuCI
+                # view reads so managed mode shows the peer table too.
+                peers=$(echo "$p" | jq -c '{peers: map({
+                    id: (.id // 0),
+                    hostname: (.hostname // ""),
+                    ipv4: (.cidr // .ipv4 // ""),
+                    version: (.version // ""),
+                    latency_ms: ((.lat_ms // 0) | if type == "number" then . else (tonumber? // 0) end),
+                    next_hop: 0,
+                    cost: (.cost // 0)
+                })}')
+            elif echo "$p" | jq -e '.peers' >/dev/null 2>&1; then
+                peers=$p
+            fi
+            r=$("$active_cli" -p "$RPC" -o json route 2>/dev/null)
+            echo "$r" | jq -e . >/dev/null 2>&1 && routes=$r
+        fi
+
+        # The Go core in console (-w) mode has no RPC portal, so easytier-cli
+        # cannot see it; the daemon publishes its peer table to a status file
+        # instead (ET_CONSOLE_STATUS_FILE, refreshed every 30s).
+        if [ "$peers" = '{"peers":[]}' ] && [ -n "$CONSOLE_STATUS" ] && [ -f "$CONSOLE_STATUS" ]; then
+            # Freshness comes from the JSON itself: busybox has no stat(1).
+            p=$(cat "$CONSOLE_STATUS")
+            updated=$(echo "$p" | jq -r '.updated // 0' 2>/dev/null)
+            now=$(date +%s)
+            if [ -n "$updated" ] && [ "$updated" -gt 0 ] && [ $((now - updated)) -lt 120 ]; then
+                if echo "$p" | jq -e '.peers.peers' >/dev/null 2>&1; then
+                    peers=$(echo "$p" | jq -c '.peers')
+                fi
+                if echo "$p" | jq -e '.routes' >/dev/null 2>&1; then
+                    routes=$(echo "$p" | jq -c '.routes')
+                fi
+            fi
+        fi
+
+        rx=0
+        tx=0
+        if [ -f /proc/net/dev ]; then
+            read -r rx tx <<EOF
+$(awk -v d="$dev_name:" '$1 == d {print $2, $10; exit}' /proc/net/dev 2>/dev/null)
+EOF
+            [ -n "$rx" ] || rx=0
+            [ -n "$tx" ] || tx=0
+        fi
+
+        logs=""
+        if command -v logread >/dev/null 2>&1; then
+            logs=$(logread 2>/dev/null | grep -i "easytier" | tail -n 100)
+        fi
+
+        jq -n \
+            --argjson running "$running" \
+            --argjson autostart "$autostart" \
+            --arg pid "${PID:-}" \
+            --argjson uptime "${uptime:-0}" \
+            --arg version "$version" \
+            --arg network_name "$network_name" \
+            --arg hostname "$hostname" \
+            --arg ipv4 "$ipv4" \
+            --arg dev_name "$dev_name" \
+            --argjson mtu "${mtu:-1380}" \
+            --argjson no_tun "$no_tun" \
+            --argjson peers "$peers" \
+            --argjson routes "$routes" \
+            --argjson managed "$managed" \
+            --arg rx "$rx" \
+            --arg tx "$tx" \
+            --arg logs "$logs" \
+            '{success: true, running: $running, autostart: $autostart, pid: $pid, uptime: $uptime,
+              version: $version, network_name: $network_name, hostname: $hostname, ipv4: $ipv4,
+              dev_name: $dev_name, mtu: $mtu, no_tun: $no_tun, peers: $peers, routes: $routes,
+              managed: $managed, rx_bytes: $rx, tx_bytes: $tx, logs: $logs}'
+        ;;
+
+    action)
+        op=$(get_query_param "op")
+        case "$op" in
+            start|stop|restart)
+                out=$("$INIT" "$op" 2>&1)
+                code=$?
+                jq -n --arg op "$op" --argjson code "$code" --arg out "$out" \
+                    '{success: ($code == 0), op: $op, code: $code, output: $out}'
+                ;;
+            *)
+                json_error "invalid operation"
+                ;;
+        esac
+        ;;
+
+    autostart)
+        op=$(get_query_param "op")
+        case "$op" in
+            enable)
+                out=$("$INIT" enable 2>&1); code=$?
+                ;;
+            disable)
+                out=$("$INIT" disable 2>&1); code=$?
+                ;;
+            *)
+                json_error "invalid autostart operation"; exit 0
+                ;;
+        esac
+        jq -n --arg op "$op" --argjson code "$code" --arg out "$out" \
+            '{success: ($code == 0), op: $op, code: $code, output: $out}'
+        ;;
+
+    get_basic)
+        listeners=$(listener_list | jq -R -s 'split("\n") | map(select(length > 0))')
+        peers=$(peer_list | jq -R -s 'split("\n") | map(select(length > 0))')
+        mtu_value=$(conf_number mtu)
+        [ -n "$mtu_value" ] || mtu_value=1380
+        flags="{"
+        for pair in \
+            latency_first:false use_smoltcp:false enable_ipv6:true auto_public_ipv6:false \
+            enable_kcp_proxy:false disable_kcp_input:false enable_quic_proxy:false disable_quic_input:false \
+            disable_p2p:false p2p_only:false lazy_p2p:false bind_device:true no_tun:false \
+            enable_exit_node:false relay_all_peer_rpc:false need_p2p:false multi_thread:true \
+            proxy_forward_by_system:false enable_encryption:true \
+            disable_tcp_hole_punching:false disable_udp_hole_punching:false \
+            enable_udp_broadcast_relay:false disable_upnp:false disable_sym_hole_punching:false \
+            accept_dns:false private_mode:false; do
+            k=${pair%:*}
+            d=${pair#*:}
+            flags="$flags$(printf '"%s": %s,' "$k" "$(conf_bool "$k" "$d")")"
+        done
+        flags="${flags%,}}"
+        jq -n \
+            --arg network_name "$(conf_value network_name)" \
+            --arg hostname "$(conf_value hostname)" \
+            --arg ipv4 "$(conf_value ipv4)" \
+            --argjson listeners "$listeners" \
+            --argjson peers "$peers" \
+            --argjson mtu "${mtu_value:-1380}" \
+            --argjson no_tun "$(conf_bool no_tun false)" \
+            --argjson flags "$flags" \
+            --arg secret_set "$(conf_value network_secret)" \
+            '{success: true, network_name: $network_name, hostname: $hostname, ipv4: $ipv4,
+              listeners: $listeners, peers: $peers, mtu: $mtu, no_tun: $no_tun,
+              flags: $flags, secret_set: ($secret_set != "")}'
+        ;;
+
+    get_managed)
+        enabled=false
+        url="udp://easytier.wx2020.cn:22020/wx2020"
+        machine_id="f50"
+        hostname="f50"
+        if [ -f "$MANAGED" ]; then
+            enabled=$(jq -r '.enabled // false' "$MANAGED" 2>/dev/null)
+            url=$(jq -r --arg d "$url" '.url // $d' "$MANAGED" 2>/dev/null)
+            machine_id=$(jq -r --arg d "$machine_id" '.machine_id // $d' "$MANAGED" 2>/dev/null)
+            hostname=$(jq -r --arg d "$hostname" '.hostname // $d' "$MANAGED" 2>/dev/null)
+        fi
+        official=false
+        [ -x "$OFFICIAL_CORE" ] && official=true
+        jq -n --argjson enabled "$enabled" --arg url "$url" --arg machine_id "$machine_id" \
+            --arg hostname "$hostname" --argjson official "$official" \
+            '{success: true, enabled: $enabled, url: $url, machine_id: $machine_id, hostname: $hostname, official_available: $official}'
+        ;;
+
+    save_managed)
+        body=$(read_post_data)
+        if ! echo "$body" | jq -e . >/dev/null 2>&1; then
+            json_error "invalid JSON body"
+            exit 0
+        fi
+        enabled=$(echo "$body" | jq -r '.enabled // false')
+        url=$(echo "$body" | jq -r '.url // ""')
+        machine_id=$(echo "$body" | jq -r '.machine_id // "f50"')
+        hostname=$(echo "$body" | jq -r '.hostname // "f50"')
+        case "$url" in
+            udp://*|tcp://*|ws://*|wss://*|http://*|https://*) ;;
+            *) json_error "invalid config server url"; exit 0 ;;
+        esac
+        if [ "$enabled" = "true" ] && [ ! -x "$OFFICIAL_CORE" ]; then
+            json_error "official easytier-core is not installed"
+            exit 0
+        fi
+        mkdir -p /root/config/easytier
+        jq -n --argjson enabled "$enabled" --arg url "$url" --arg machine_id "$machine_id" \
+            --arg hostname "$hostname" \
+            '{enabled: $enabled, url: $url, machine_id: $machine_id, hostname: $hostname}' > "$MANAGED"
+        chmod 600 "$MANAGED"
+        "$INIT" restart >/dev/null 2>&1
+        echo '{"success": true}'
+        ;;
+
+    get_config)
+        if [ -f "$CONF" ]; then
+            jq -n --rawfile text "$CONF" '{success: true, config: $text}'
+        else
+            json_error "config not found"
+        fi
+        ;;
+
+    save_config)
+        if managed_enabled; then
+            json_error "local configuration is locked: managed by the web console"
+            exit 0
+        fi
+        tmp="/tmp/easytier-save-$$.toml"
+        read_post_data > "$tmp"
+        if [ ! -s "$tmp" ]; then
+            rm -f "$tmp"
+            json_error "empty config"
+            exit 0
+        fi
+        if ! "$CORE" --check-config --config-file "$tmp" >/tmp/easytier-check-$$.out 2>&1; then
+            out=$(cat /tmp/easytier-check-$$.out 2>/dev/null)
+            rm -f "$tmp" /tmp/easytier-check-$$.out
+            jq -n --arg out "$out" '{success: false, error: ("config validation failed: " + $out)}'
+            exit 0
+        fi
+        mkdir -p /root/config/easytier
+        [ -f "$CONF" ] && cp "$CONF" "/root/config/easytier/config.toml.bak.$(date +%s)"
+        cat "$tmp" > "$CONF"
+        chmod 600 "$CONF"
+        rm -f "$tmp" /tmp/easytier-check-$$.out
+        restart=$(get_query_param "restart")
+        if [ "$restart" = "1" ]; then
+            "$INIT" restart >/dev/null 2>&1
+        fi
+        echo '{"success": true}'
+        ;;
+
+    save_basic)
+        if managed_enabled; then
+            json_error "local configuration is locked: managed by the web console"
+            exit 0
+        fi
+        body=$(read_post_data)
+        if ! echo "$body" | jq -e . >/dev/null 2>&1; then
+            json_error "invalid JSON body"
+            exit 0
+        fi
+        network_name=$(echo "$body" | jq -r '.network_name // ""')
+        network_secret=$(echo "$body" | jq -r '.network_secret // ""')
+        hostname=$(echo "$body" | jq -r '.hostname // "f50"')
+        ipv4=$(echo "$body" | jq -r '.ipv4 // ""')
+        mtu=$(echo "$body" | jq -r '.mtu // 1380')
+        no_tun=$(echo "$body" | jq -r '.no_tun // false')
+        if [ -z "$network_secret" ] || [ "$network_secret" = "********" ]; then
+            network_secret=$(conf_value network_secret)
+        fi
+        if [ -z "$network_name" ] || [ -z "$network_secret" ]; then
+            json_error "network_name and network_secret are required"
+            exit 0
+        fi
+        listeners=$(echo "$body" | jq -r '(.listeners // []) | map(@json) | join(", ")')
+        peer_block=$(echo "$body" | jq -r '(.peers // [])[]? | "[[peer]]\nuri = " + (@json)')
+        flags=$(echo "$body" | jq -c '.flags // {}')
+        flag_val() {
+            # Missing flag in the request keeps the value already on disk, so a
+            # client with an older cached view cannot reset the whole [flags]
+            # block to defaults.
+            local current
+            current=$(conf_bool "$1" "$2")
+            echo "$flags" | jq -r --arg k "$1" --arg d "$current" 'if has($k) then (.[$k] | tostring) else $d end'
+        }
+        tmp="/tmp/easytier-basic-$$.toml"
+        {
+            echo "instance_name = \"default\""
+            echo "hostname = $(printf '%s' "$hostname" | jq -Rr @json)"
+            if [ -n "$ipv4" ]; then
+                echo "ipv4 = $(printf '%s' "$ipv4" | jq -Rr @json)"
+                echo "dhcp = false"
+            else
+                echo "dhcp = true"
+            fi
+            echo "listeners = [$listeners]"
+            echo ""
+            echo "[network_identity]"
+            echo "network_name = $(printf '%s' "$network_name" | jq -Rr @json)"
+            echo "network_secret = $(printf '%s' "$network_secret" | jq -Rr @json)"
+            if [ -n "$peer_block" ]; then
+                echo ""
+                echo "$peer_block"
+            fi
+            echo ""
+            echo "[flags]"
+            echo "no_tun = $no_tun"
+            echo "mtu = $mtu"
+            echo "dev_name = \"easytier0\""
+            echo "latency_first = $(flag_val latency_first false)"
+            echo "use_smoltcp = $(flag_val use_smoltcp false)"
+            echo "enable_ipv6 = $(flag_val enable_ipv6 true)"
+            echo "auto_public_ipv6 = $(flag_val auto_public_ipv6 false)"
+            echo "enable_kcp_proxy = $(flag_val enable_kcp_proxy false)"
+            echo "disable_kcp_input = $(flag_val disable_kcp_input false)"
+            echo "enable_quic_proxy = $(flag_val enable_quic_proxy false)"
+            echo "disable_quic_input = $(flag_val disable_quic_input false)"
+            echo "disable_p2p = $(flag_val disable_p2p false)"
+            echo "p2p_only = $(flag_val p2p_only false)"
+            echo "lazy_p2p = $(flag_val lazy_p2p false)"
+            echo "bind_device = $(flag_val bind_device true)"
+            echo "enable_exit_node = $(flag_val enable_exit_node false)"
+            echo "relay_all_peer_rpc = $(flag_val relay_all_peer_rpc false)"
+            echo "need_p2p = $(flag_val need_p2p false)"
+            echo "multi_thread = $(flag_val multi_thread true)"
+            echo "proxy_forward_by_system = $(flag_val proxy_forward_by_system false)"
+            echo "enable_encryption = $(flag_val enable_encryption true)"
+            echo "disable_tcp_hole_punching = $(flag_val disable_tcp_hole_punching false)"
+            echo "disable_udp_hole_punching = $(flag_val disable_udp_hole_punching false)"
+            echo "enable_udp_broadcast_relay = $(flag_val enable_udp_broadcast_relay false)"
+            echo "disable_upnp = $(flag_val disable_upnp false)"
+            echo "disable_sym_hole_punching = $(flag_val disable_sym_hole_punching false)"
+            echo "accept_dns = $(flag_val accept_dns false)"
+            echo "private_mode = $(flag_val private_mode false)"
+        } > "$tmp"
+        if ! "$CORE" --check-config --config-file "$tmp" >/tmp/easytier-check-$$.out 2>&1; then
+            out=$(cat /tmp/easytier-check-$$.out 2>/dev/null)
+            rm -f "$tmp" /tmp/easytier-check-$$.out
+            jq -n --arg out "$out" '{success: false, error: ("config validation failed: " + $out)}'
+            exit 0
+        fi
+        mkdir -p /root/config/easytier
+        [ -f "$CONF" ] && cp "$CONF" "/root/config/easytier/config.toml.bak.$(date +%s)"
+        cat "$tmp" > "$CONF"
+        chmod 600 "$CONF"
+        rm -f "$tmp" /tmp/easytier-check-$$.out
+        "$INIT" restart >/dev/null 2>&1
+        echo '{"success": true}'
+        ;;
+
+    logs)
+        if command -v logread >/dev/null 2>&1; then
+            logs=$(logread 2>/dev/null | grep -i "easytier" | tail -n 200)
+        fi
+        jq -n --arg logs "$logs" '{success: true, logs: $logs}'
+        ;;
+
+    ping)
+        target=$(get_query_param "target")
+        target=$(echo "$target" | tr -cd 'a-zA-Z0-9.:_-')
+        [ -n "$target" ] || target="10.64.0.1"
+        out=$(ping -c 3 -W 2 "$target" 2>&1)
+        code=$?
+        jq -n --arg target "$target" --arg out "$out" --argjson code "$code" \
+            '{success: ($code == 0), target: $target, code: $code, output: $out}'
+        ;;
+
+    *)
+        json_error "unknown action"
+        ;;
+esac
