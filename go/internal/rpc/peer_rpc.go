@@ -95,9 +95,8 @@ func (m *PeerRpcManager) Register(domain string, svc RpcService) error {
 	if m == nil {
 		return errors.New("nil peer rpc manager")
 	}
-	if domain == "" {
-		return errors.New("rpc service domain is required")
-	}
+	// An empty domain is legal: the config-server session registers its
+	// services there (see internal/webconsole).
 	if svc == nil {
 		return errors.New("rpc service is nil")
 	}
@@ -154,6 +153,23 @@ func (m *PeerRpcManager) Call(ctx context.Context, dstPeerID uint32, domain, ser
 		ServiceName: serviceName,
 		MethodIndex: methodIndex,
 	}, requestBody)
+}
+
+// CallService invokes one method on a service whose proto name equals its
+// service name, which is how the reference names every peer_rpc service
+// (DirectConnectorRpc, UdpHolePunchRpc, TcpHolePunchRpc, PeerCenterRpc).
+// The reference registry keys services by (domain, service name, proto name),
+// so the placeholder proto name used by Call never matches a reference peer.
+func (m *PeerRpcManager) CallService(ctx context.Context, dstPeerID uint32, domain, serviceName string, methodIndex uint32, body []byte) ([]byte, error) {
+	if serviceName == "" {
+		return nil, errors.New("rpc service name is required")
+	}
+	return m.CallDescriptor(ctx, dstPeerID, &RpcDescriptor{
+		DomainName:  domain,
+		ProtoName:   serviceName,
+		ServiceName: serviceName,
+		MethodIndex: methodIndex,
+	}, body)
 }
 
 // CallDescriptor invokes one method with a fully specified descriptor so the
@@ -341,33 +357,17 @@ func (m *PeerRpcManager) dispatchRequest(ctx context.Context, request RpcPacket)
 }
 
 func (m *PeerRpcManager) sendResponse(ctx context.Context, request RpcPacket, responseBody []byte) error {
-	// The reference wraps method output in an RpcResponse envelope.
+	// The reference wraps method output in an RpcResponse envelope and
+	// fragments the encoded envelope the same way as requests
+	// (build_rpc_packet → split_rpc_content_for_udp_budget). A single-piece
+	// response over the UDP payload budget (e.g. CollectNetworkInfo with many
+	// peers) makes the remote UDP transport reject the packet and drop the
+	// whole tunnel session.
 	responseBody, err := proto.Marshal(&commonpb.RpcResponse{Response: responseBody})
 	if err != nil {
 		return fmt.Errorf("marshal rpc response envelope: %w", err)
 	}
-	response := RpcPacket{
-		FromPeer:      m.localPeerID,
-		ToPeer:        request.FromPeer,
-		TransactionID: request.TransactionID,
-		Descriptor:    request.Descriptor,
-		Body:          responseBody,
-		IsRequest:     false,
-		TotalPieces:   1,
-	}
-	wire, err := response.Marshal()
-	if err != nil {
-		return fmt.Errorf("marshal rpc response: %w", err)
-	}
-	out := protocol.Packet{
-		Header: protocol.PeerManagerHeader{
-			FromPeerID: m.localPeerID,
-			ToPeerID:   request.FromPeer,
-			PacketType: protocol.PacketTypeRPCResponse,
-		},
-		Payload: wire,
-	}
-	return m.transport.Send(ctx, request.FromPeer, out)
+	return m.sendFragmented(ctx, request.FromPeer, request.TransactionID, request.Descriptor, responseBody, false)
 }
 
 func (m *PeerRpcManager) sendErrorResponse(ctx context.Context, request RpcPacket, rpcErr error) error {
