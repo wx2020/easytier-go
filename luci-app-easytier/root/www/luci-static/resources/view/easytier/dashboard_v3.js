@@ -34,7 +34,7 @@ function apiPost(action, data, params) {
 function fmtBytes(value) {
 	var b = parseInt(value, 10) || 0;
 	if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
-	if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+	if (b >= 1048576) return (b / 1073741824).toFixed(2) + ' MB';
 	if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
 	return b + ' B';
 }
@@ -49,32 +49,85 @@ function fmtUptime(seconds) {
 	return m + ' 分';
 }
 
+/*
+ * Theme-aware styling. The active theme may be aurora (tokens: --surface,
+ * --hairline, --text, --text-muted, --brand, --danger, --radius-base, ...,
+ * flipped by html[data-darkmode]), bootstrap (tokens: --background-color-*,
+ * --border-color-*, --text-color-*, ...), or any other LuCI theme without
+ * either family. Every rule therefore resolves through a fallback chain:
+ * aurora token -> bootstrap/LuCI token -> literal. var() follows the theme
+ * live, so dark/light switches need no JS.
+ */
+var CSS = [
+	'.et-view { color: var(--text, var(--text-color-high, #1f2933)); font-size: 0.9rem; }',
+	'.et-view .et-desc { color: var(--text-muted, var(--text-color-medium, #6b7280)); margin: 0 0 12px; }',
+
+	/* cards: aurora #maincontent .cbi-section look, theme tokens only */
+	'.et-card { background: var(--surface, var(--background-color-high, #fff)); border: 1px solid var(--hairline, var(--border-color-low, #e3e6ea)); border-radius: calc(var(--radius-base, 0.5rem) * 2); padding: 14px 16px; margin-bottom: 14px; box-shadow: var(--app-shadow-sm, 0 1px 3px rgba(0,0,0,.05)); }',
+	'.et-card > h3 { margin: 0 0 10px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted, var(--text-color-medium, #6b7280)); }',
+	'.et-card > h3::before { content: \'\'; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--brand, var(--primary, #0085b7)); margin-right: 7px; vertical-align: 1px; }',
+
+	/* key-value rows */
+	'.et-kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed color-mix(in oklab, var(--hairline, var(--border-color-low, #e3e6ea)) 60%, transparent); font-variant-numeric: tabular-nums; }',
+	'.et-kv:last-child { border-bottom: none; }',
+	'.et-kv > span:first-child { color: var(--text-muted, var(--text-color-medium, #6b7280)); flex: 0 0 auto; }',
+	'.et-kv > span:last-child { font-family: var(--font-mono, monospace); word-break: break-all; text-align: right; }',
+
+	/* action rows */
+	'.et-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }',
+	'.et-actions .cbi-button { margin: 0; }',
+
+	/* form rows (aurora has no .cbi-value layout; own grid instead) */
+	'.et-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 4px 14px; align-items: center; padding: 5px 0; }',
+	'.et-field > label { color: var(--text-muted, var(--text-color-medium, #6b7280)); font-size: 0.85rem; }',
+	'.et-field .cbi-input-text, .et-field .cbi-input-textarea { width: 100%; max-width: 480px; box-sizing: border-box; }',
+
+	/* flags grid */
+	'.et-flags { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 2px 16px; }',
+	'.et-flags label { display: flex; gap: 8px; align-items: center; padding: 3px 0; }',
+	'.et-flag-note { color: var(--text-muted, var(--text-color-medium, #6b7280)); margin: 10px 0 0; font-size: 0.82rem; }',
+
+	/* peer table: theme .table already styles borders; align cell text */
+	'.et-table-wrap { overflow-x: auto; }',
+	'.et-table-wrap table { width: 100%; margin-bottom: 0; }',
+	'.et-table-wrap th { text-align: left; white-space: nowrap; color: var(--text-muted, var(--text-color-medium, #6b7280)); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }',
+	'.et-table-wrap td { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }',
+
+	/* log box */
+	'.et-logs { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 0; padding: 10px 12px; font-size: 0.8rem; line-height: 1.5; background: var(--surface-sunken, var(--background-color-low, rgba(127,127,127,.08))); border: 1px solid var(--hairline, var(--border-color-low, #e3e6ea)); border-radius: var(--radius-base, 0.5rem); color: var(--text, var(--text-color-high, #1f2933)); }',
+
+	/* status dot */
+	'.et-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }',
+	'.et-dot.ok { background: var(--success, var(--success-color-high, #35c26e)); }',
+	'.et-dot.off { background: var(--text-subtle, var(--text-color-low, #9aa2ab)); }',
+
+	/* badges for managed mode */
+	'.et-badge { display: inline-block; padding: 1px 8px; border-radius: 99px; background: color-mix(in oklab, var(--brand, var(--primary, #0085b7)) 15%, transparent); color: var(--brand, var(--primary, #0085b7)); font-size: 0.74rem; font-weight: 600; }'
+].join('\n');
+
 function card(title, body) {
-	return E('div', {
-		'style': 'background: var(--background-color-medium, #f5f5f5); border-radius: 8px; padding: 14px; margin-bottom: 14px;'
-	}, [
-		E('h3', { 'style': 'margin: 0 0 10px 0; font-size: 1rem;' }, title),
+	return E('div', { 'class': 'et-card' }, [
+		E('h3', {}, title),
 		body
 	]);
 }
 
 function kv(label, value) {
-	return E('div', { 'style': 'display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--border-color, #e5e7eb);' }, [
-		E('span', { 'style': 'color: var(--text-color-low, #6b7280);' }, label),
-		E('span', { 'style': 'font-family: var(--font-mono, monospace); word-break: break-all; text-align: right;' }, value)
+	return E('div', { 'class': 'et-kv' }, [
+		E('span', {}, label),
+		E('span', {}, value)
 	]);
 }
 
 function button(label, handler, primary) {
 	return E('button', {
 		'class': 'btn cbi-button ' + (primary ? 'cbi-button-apply' : 'cbi-button-reset'),
-		'style': 'margin-right: 8px; margin-top: 6px;',
 		'click': function(ev) { ev.preventDefault(); handler(); }
 	}, label);
 }
 
 function statusValue(id, text) {
-	return E('span', { 'id': id, 'style': 'font-family: var(--font-mono, monospace);' }, text || '--');
+	return E('span', { 'id': id }, text || '--');
 }
 
 function renderPeerTable(peers) {
@@ -102,7 +155,7 @@ function renderPeerTable(peers) {
 			E('td', {}, String(p.cost || 0))
 		]));
 	});
-	return E('div', { 'style': 'overflow-x: auto;' }, E('table', { 'class': 'table', 'style': 'width: 100%;' }, rows));
+	return E('div', { 'class': 'et-table-wrap' }, E('table', { 'class': 'table' }, rows));
 }
 
 return view.extend({
@@ -127,7 +180,7 @@ return view.extend({
 			hostname: E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': basic.hostname || 'f50' }),
 			ipv4: E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': basic.ipv4 || '' }),
 			listeners: E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': (basic.listeners || []).join(',') }),
-			peers: E('textarea', { 'class': 'cbi-input-textarea', 'rows': 3, 'style': 'width: 100%;' }, (basic.peers || []).join('\n')),
+			peers: E('textarea', { 'class': 'cbi-input-textarea', 'rows': 3 }, (basic.peers || []).join('\n')),
 			mtu: E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': basic.mtu || 1380 }),
 			no_tun: E('input', { 'type': 'checkbox' })
 		};
@@ -200,7 +253,7 @@ return view.extend({
 					ui.addNotification(null, E('p', {}, '接管设置已保存，服务已重启。'));
 					window.setTimeout(function() { window.location.reload(); }, 1200);
 				} else {
-					ui.addNotification(null, E('p', { 'style': 'color: #ef4444;' }, '保存失败：' + (res.error || 'unknown')));
+					ui.addNotification(null, E('p', {}, '保存失败：' + (res.error || 'unknown')), 'error');
 				}
 			});
 		}
@@ -234,7 +287,7 @@ return view.extend({
 				if (res.success) {
 					ui.addNotification(null, E('p', {}, '配置已保存并重启 EasyTier。'));
 				} else {
-					ui.addNotification(null, E('p', { 'style': 'color: #ef4444;' }, '保存失败：' + (res.error || 'unknown')));
+					ui.addNotification(null, E('p', {}, '保存失败：' + (res.error || 'unknown')), 'error');
 				}
 			});
 		}
@@ -242,7 +295,7 @@ return view.extend({
 		function runAction(op) {
 			apiGet('action', { op: op }).then(function(res) {
 				if (!res.success)
-					ui.addNotification(null, E('p', { 'style': 'color: #ef4444;' }, op + ' 失败：' + (res.output || res.error || '')));
+					ui.addNotification(null, E('p', {}, op + ' 失败：' + (res.output || res.error || '')), 'error');
 				refresh();
 			});
 		}
@@ -251,13 +304,20 @@ return view.extend({
 			var op = status.autostart ? 'disable' : 'enable';
 			apiGet('autostart', { op: op }).then(function(res) {
 				if (!res.success)
-					ui.addNotification(null, E('p', { 'style': 'color: #ef4444;' }, '开机自启设置失败'));
+					ui.addNotification(null, E('p', {}, '开机自启设置失败'), 'error');
 				refresh();
 			});
 		}
 
+		function statusDot(ok) {
+			return E('span', { 'class': 'et-dot ' + (ok ? 'ok' : 'off') });
+		}
+
 		var statusCard = card('运行状态', E('div', {}, [
-			kv('状态', statusValue('et-running', status.running ? '● 运行中' : '○ 已停止')),
+			kv('状态', E('span', { 'id': 'et-running-wrap' }, [
+				statusDot(status.running),
+				statusValue('et-running', status.running ? '运行中' : '已停止')
+			])),
 			kv('管理方式', statusValue('et-managed', status.managed ? 'Web 控制台（官方核心）' : '本地配置（easytier-go）')),
 			kv('PID', statusValue('et-pid', status.pid || '-')),
 			kv('运行时长', statusValue('et-uptime', fmtUptime(status.uptime))),
@@ -267,7 +327,7 @@ return view.extend({
 			kv('核心版本', statusValue('et-version', status.version || '-')),
 			kv('开机自启', statusValue('et-autostart', status.autostart ? '已启用' : '已关闭')),
 			kv('接收 / 发送', statusValue('et-traffic', fmtBytes(status.rx_bytes) + ' / ' + fmtBytes(status.tx_bytes))),
-			E('div', { 'style': 'margin-top: 10px;' }, [
+			E('div', { 'class': 'et-actions' }, [
 				button('启动', function() { runAction('start'); }, true),
 				button('停止', function() { runAction('stop'); }, false),
 				button('重启', function() { runAction('restart'); }, false),
@@ -277,42 +337,43 @@ return view.extend({
 
 		var peersCard = card('Peers', E('div', { 'id': 'et-peer-box' }, renderPeerTable(status.peers ? status.peers.peers : [])));
 
+		function fieldRow(label, input) {
+			return E('div', { 'class': 'et-field' }, [E('label', {}, label), input]);
+		}
+
 		var managedCard = card('Web 控制台接管', E('div', {}, [
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '启用接管'), E('div', { 'class': 'cbi-value-field' }, mForm.enabled)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '控制台地址'), E('div', { 'class': 'cbi-value-field' }, mForm.url)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '机器 ID'), E('div', { 'class': 'cbi-value-field' }, mForm.machine_id)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '机器名'), E('div', { 'class': 'cbi-value-field' }, mForm.hostname)]),
-			E('p', { 'style': 'color: var(--text-color-low, #6b7280);' }, '先在控制台注册该机器，再启用接管。启用后本地配置立即锁定且不再生效：服务改用官方 easytier-core -w 从控制台拉取配置。'),
-			E('div', { 'style': 'margin-top: 10px;' }, button('保存接管设置', saveManaged, true))
+			fieldRow('启用接管', mForm.enabled),
+			fieldRow('控制台地址', mForm.url),
+			fieldRow('机器 ID', mForm.machine_id),
+			fieldRow('机器名', mForm.hostname),
+			E('p', { 'class': 'et-flag-note' }, '先在控制台注册该机器，再启用接管。启用后本地配置立即锁定且不再生效：服务改用官方 easytier-core -w 从控制台拉取配置。'),
+			E('div', { 'class': 'et-actions' }, button('保存接管设置', saveManaged, true))
 		]));
 
 		var configCard = card('基础配置', E('div', {}, [
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '网络名称'), E('div', { 'class': 'cbi-value-field' }, form.network_name)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '网络密钥'), E('div', { 'class': 'cbi-value-field' }, form.network_secret)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '主机名'), E('div', { 'class': 'cbi-value-field' }, form.hostname)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '虚拟 IPv4（CIDR）'), E('div', { 'class': 'cbi-value-field' }, form.ipv4)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, '监听地址（逗号分隔）'), E('div', { 'class': 'cbi-value-field' }, form.listeners)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, 'Peer 地址（每行一个）'), E('div', { 'class': 'cbi-value-field' }, form.peers)]),
-			E('div', { 'class': 'cbi-value' }, [E('label', { 'class': 'cbi-value-title' }, 'MTU'), E('div', { 'class': 'cbi-value-field' }, form.mtu)]),
-			E('div', { 'style': 'margin-top: 10px;' }, basicSaveBtn)
+			fieldRow('网络名称', form.network_name),
+			fieldRow('网络密钥', form.network_secret),
+			fieldRow('主机名', form.hostname),
+			fieldRow('虚拟 IPv4（CIDR）', form.ipv4),
+			fieldRow('监听地址（逗号分隔）', form.listeners),
+			fieldRow('Peer 地址（每行一个）', form.peers),
+			fieldRow('MTU', form.mtu),
+			E('div', { 'class': 'et-actions' }, basicSaveBtn)
 		]));
 
 		var advancedCard = card('高级设置', E('div', {}, [
-			E('div', { 'style': 'display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 2px 16px;' },
+			E('div', { 'class': 'et-flags' },
 				flagDefs.map(function(def) {
-					return E('label', { 'style': 'display: flex; gap: 8px; align-items: center; padding: 3px 0;' }, [
-						flagInputs[def.key],
-						E('span', {}, def.label)
-					]);
+					return E('label', {}, [flagInputs[def.key], E('span', {}, def.label)]);
 				})),
-			E('p', { 'style': 'color: var(--text-color-low, #6b7280); margin: 10px 0 0 0;' },
+			E('p', { 'class': 'et-flag-note' },
 				'部分选项是否生效取决于核心版本；“自动获取公网 IPv6”需要 IPv6 已启用。'),
-			E('div', { 'style': 'margin-top: 10px;' }, advancedSaveBtn)
+			E('div', { 'class': 'et-actions' }, advancedSaveBtn)
 		]));
 
 		var logsCard = card('最近日志', E('pre', {
 			'id': 'et-logs',
-			'style': 'max-height: 260px; overflow: auto; white-space: pre-wrap; font-size: 0.8rem; margin: 0;'
+			'class': 'et-logs'
 		}, status.logs || '（暂无日志）'));
 
 		function refresh() {
@@ -322,7 +383,9 @@ return view.extend({
 					var node = document.getElementById(id);
 					if (node) node.textContent = text;
 				};
-				set('et-running', s.running ? '● 运行中' : '○ 已停止');
+				set('et-running', s.running ? '运行中' : '已停止');
+				var dotWrap = document.getElementById('et-running-wrap');
+				if (dotWrap) dom.content(dotWrap, [statusDot(s.running), s.running ? '运行中' : '已停止']);
 				set('et-managed', s.managed ? 'Web 控制台（官方核心）' : '本地配置（easytier-go）');
 				set('et-pid', s.pid || '-');
 				set('et-uptime', fmtUptime(s.uptime));
@@ -341,9 +404,10 @@ return view.extend({
 
 		poll.add(refresh, 5);
 
-		return E('div', {}, [
+		return E('div', { 'class': 'et-view' }, [
+			E('style', { 'type': 'text/css' }, CSS),
 			E('h2', {}, 'EasyTier 组网'),
-			E('p', { 'style': 'color: var(--text-color-low, #6b7280);' }, 'EasyTier 状态、Peers、配置与 Web 控制台接管。修改配置后会自动重启服务。'),
+			E('p', { 'class': 'et-desc' }, 'EasyTier 状态、Peers、配置与 Web 控制台接管。修改配置后会自动重启服务。'),
 			managedCard,
 			statusCard,
 			peersCard,

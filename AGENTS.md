@@ -185,10 +185,21 @@ gofmt -l .   # must be empty; CI fails on diffs
 
 ### 2026-10-27 全部工作已 commit（8 个提交）+ F50 部署 `v2.6.4-gof50-1027`（临时延迟口径补丁）
 
-- **提交划分**：`86bdd60` rpc 响应分片 → `a6a72a2` p2p 线级修复（方法索引/proto_name/protobuf body + 直连数据面测试）→ `71b4f27` pinger 会话级 pong + 跳数代价 → `9433d5e` proxy_cidr 内核路由 + Linux TUN → `e8a6ffb` LuCI app → `b320365` 文档/工作流 → `1036743` QUIC ctx + webclient 整包加密 → `8b7dc11` CallService 测试。
+- **提交划分**：`86bdd60` rpc 响应分片 → `a6a72a2` p2p 线级修复（方法索引/proto_name/protobuf body + 直连数据面测试）→ `71b4f27` pinger 会话级 pong + 跳数代价 → `9433d5e` proxy_cidr 内核路由 + Linux TUN → `e8a6ffb` LuCI app → `b320365` 文档/工作流 → `1036743` QUIC ctx + webclient 整包加密 → `8b7dc11` CallService 测试 → `b0b39f2` TEMPORARY 延迟口径补丁。**工作区已清零，9 个提交在 feature 分支**。
 - **F50 部署版 = HEAD + 一个临时补丁**：`directLinkCosts` 暂回**延迟口径**（代码里留 TEMPORARY 注释指明 revert 条件 = noise Data 帧修复），因为 HEAD 的 cost=1 已被 A/B 证明在 Go→Rust noise Data 修好前会黑洞直连流量。活性过滤（Samples==0 不通告）保留。md5 `992e235e…`，PID 14658，实测 **8/8 peer 全通**（.1–.9、.40 含 .3/.9 冷启动后恢复），控制台 method=4 正常、零 `exceeds`。上一版备份 `/root/backup/easytier-core.bak-20261027-gorespfrag1`。
 - `.gitignore` 新增 `/.tmp/` 与 `luci-app-easytier/{bin,build}`（68M 构建产物不入库）。
 - **待办**：Go→Rust noise Data 帧兼容（`secure_datagram.go` 对照 `peer_conn.rs`）→ revert TEMPORARY 补丁启用 cost=1 → commit + 部署。
+
+### 2026-11-02 LuCI 面板不跟随 aurora 主题：CSS 变量族不匹配，已修复并部署
+
+- **症状**：F50 当前主题 **aurora**（`uci get luci.main.mediaurlbase` = `/luci-static/aurora`，深色模式），EasyTier 面板卡片却是浅色底 + 主题白字，文字不可读。
+- **根因**：`dashboard_v3.js` 全部内联样式引用的是 **bootstrap 系变量**（`--background-color-medium`/`--border-color`/`--text-color-low`），aurora **一个都没有**——它定义的是 Tailwind 风格族 `--surface`/`--hairline`/`--text`/`--text-muted`/`--text-subtle`/`--brand`/`--danger`/`--success`/`--radius-base`/`--app-shadow-sm`/`--surface-sunken`（`html[data-darkmode=true]` 翻转，浅色值在 `:root`）。全部 `var()` 落到浅色 fallback ⇒ 白字写在 `#f5f5f5` 卡片上。反直觉点：**输入框/按钮反而正常**——`cbi-input-text`/`cbi-button` 这些 class aurora 自己有样式，只有内联样式引用的变量失效。
+- **另两个坑**：①aurora **没有 `.cbi-value` 布局**（那是 bootstrap 的），表单行要自己排（用 grid 的 `.et-field`）；②aurora 的 `.cbi-button-reset` 是**红色危险语义**（`--danger-surface`），不是"重置"灰色。
+- **修法（`dashboard_v3.js` 全量重写样式层）**：内联样式清零，改为视图级 `<style>` 块定义 `.et-*` class（与 singbox dashboard.js 同一注入模式），每条颜色走**三级 fallback 链**：aurora 令牌 → bootstrap/LuCI 令牌（`--background-color-high`/`--text-color-high` 等，bootstrap 下由 `data-darkmode` 翻转）→ 硬色值。`var()` 随主题实时解析，深浅切换无需 JS。卡片复刻 aurora `#maincontent .cbi-section` 观感（`--surface` + `--hairline` + `--radius-base*2` + `--app-shadow-sm`）；状态点用 `--success`；错误通知从硬编码 `#ef4444` 改为 ui.addNotification 的 `error` 类型。
+- **验证方式（未登录 LuCI 无法线上看，用户确认本地仿真即可）**：`scp` aurora 的 `main.css`（185KB）到本地，包一层最小 LuCI 脚手架（`body[style=--bg]` + `#maincontent`），分别以 `data-darkmode="true"`/无属性渲染 preview-dark/light.html，浏览器截图确认深浅两种模式卡片、文字、按钮、Peer 表全部主题化；桌面 1440px 宽度布局正常。
+- **部署**：静态 JS 直接 `scp -O` 到 `/www/luci-static/resources/view/easytier/dashboard_v3.js`（md5 `fb41ad36…` 双侧一致，chmod 644）。**不要跑 `build.sh`**——它会把二进制重打为 v1.0.1，覆盖设备上手工构建的 `v2.6.4-gof50-1027`；JS 是静态文件，无需重编核心。
+- **踩坑**：F50 uhttpd 的 `/ubus` RPC 端点对空密码登录返回 `result:[6]`（拒绝），SSH 密钥登录不等于 LuCI 会话；从本机 curl 直打 `/ubus/` POST 一直 `-32700 Parse error` 是**假线索**（`GET /ubus` 404、`method:"list"` 能过 ⇒ 解析没问题，实际是 login 参数形状问题），别在这条路上耗时间。
+- **主题感知样式的参考实现**：`/www/luci-static/resources/mu300/common.js`（`hasAuroraTokens` 探测 + bootstrap 桥接 class + `document.head.appendChild(style)`）与 singbox `dashboard.js`（`cbi-map` 根节点第一个子元素放 `<style>`）。以后给这台设备写 LuCI 页面一律用 aurora 令牌 + 三级 fallback。
 
 ## Maintenance
 - 每次改完代码或完成新的分析后，必须调用 `memory-update` skill 检查并更新本文件。
